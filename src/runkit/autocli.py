@@ -3,7 +3,7 @@
 Shared by `python experiment.py ...` and `runkit run ...`. Builds the cfg from
 the config layers and forwards the staging flags to the decorated run.
 
-Two disjoint namespaces (see re-design.md):
+Two disjoint namespaces (see design.md):
   bare key=value -> cfg overrides   (the "what")
   --flag[=value] -> staging flags   (the "how/where": tag, runs_dir, out)
 

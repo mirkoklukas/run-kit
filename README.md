@@ -38,7 +38,7 @@ runkit run experiment.py [config.yaml] [key=value ...] [--flag ...]
 - config paths resolve as `cwd:NAME` (default) / `exp:NAME` (next to the experiment) / `/abs`
 
 Run dirs land at `{runs_dir}/{name}[_{tag}]_{date}_{time}_{hex8}/`, with the run
-`id = {name}_{hex8}` (greppable in `results`/`config.yaml`). See `src/runkit/re-design.md`.
+`id = {name}_{hex8}` (greppable in `results`/`config.yaml`). See `design.md`.
 
 ## Layout
 
@@ -49,4 +49,4 @@ Run dirs land at `{runs_dir}/{name}[_{tag}]_{date}_{time}_{hex8}/`, with the run
 ## Status
 
 Early. Provenance and the dirty-git gate from the old implementation are not yet
-ported to the lightweight runner. See `src/runkit/re-design.md` for the plan.
+ported to the lightweight runner. See `design.md` for the plan.

@@ -1,9 +1,9 @@
-# Experiment runner — redesign
+# Experiment runner — design
 
-A lighter, crisper take on the experiment runner, starting from the "Desired
-Experience" of `design.md` and trimming to what we actually need. We add
-features when a real need shows up, not before. (Provenance, the dirty-gate, and
-a context yaml are out of scope for this first pass — only config yamls are loaded.)
+A lighter, crisper take on the experiment runner, trimmed to what we actually
+need. We add features when a real need shows up, not before. (Provenance, the
+dirty-gate, and a context yaml are out of scope for this first pass — only config
+yamls are loaded.)
 
 ## Desired experience and usage
 

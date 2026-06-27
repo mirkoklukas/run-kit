@@ -6,7 +6,7 @@ after, a non-`None` return value is dumped into the run dir. Staging is driven b
 keyword args (the CLI flags): `tag`, `runs_dir`, `out`.
 
 The decorator carries only the experiment's *identity* (`name`); everything that
-stages an attempt is a flag. See re-design.md.
+stages an attempt is a flag. See design.md.
 """
 import dataclasses
 import datetime
