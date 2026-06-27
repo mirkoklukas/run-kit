@@ -13,7 +13,7 @@ dependencies = [
 runkit = "runkit.cli:app"
 
 [project.optional-dependencies]
-dev = ["ipython", "ruff"]
+dev = ["ipython", "pytest>=8"]
 
 [build-system]
 requires = ["hatchling"]

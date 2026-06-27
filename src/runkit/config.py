@@ -79,13 +79,20 @@ def _coerce(s):
     """Cheap YAML-ish scalar coercion. No external dep."""
     if not isinstance(s, str):
         return s
-    if s in ("true", "True"): return True
-    if s in ("false", "False"): return False
-    if s in ("null", "None", "~"): return None
-    try: return int(s)
-    except ValueError: pass
-    try: return float(s)
-    except ValueError: pass
+    if s in ("true", "True"):
+        return True
+    if s in ("false", "False"):
+        return False
+    if s in ("null", "None", "~"):
+        return None
+    try:
+        return int(s)
+    except ValueError:
+        pass
+    try:
+        return float(s)
+    except ValueError:
+        pass
     return s
 
 
