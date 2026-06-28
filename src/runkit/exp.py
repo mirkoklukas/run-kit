@@ -12,11 +12,11 @@ import dataclasses
 import datetime
 import functools
 import pathlib
-import sys
 import uuid
 
 import yaml
 
+from . import ui
 from .utils import dump_retval, serialize_cfg
 
 
@@ -62,18 +62,16 @@ def init_run(cfg, *, name, tag, runs_dir, out):
 def _announce(name, cfg, ctx):
     """Print a one-time start banner: which run, with what config, where.
 
-    Goes to stderr so it never mixes into data an experiment writes to stdout.
     The resolved config is echoed inline; the same values are frozen at
     `{out}/config.yaml`.
     """
-    cfg_inline = yaml.safe_dump(
-        serialize_cfg(cfg), default_flow_style=True, sort_keys=False).strip()
-    for line in (
-        f"[runkit] starting {name!r}  (id={ctx.id})",
-        f"[runkit] out:    {ctx.out}",
-        f"[runkit] config: {ctx.out / 'config.yaml'}  {cfg_inline}",
-    ):
-        print(line, file=sys.stderr)
+    ui.run_started(
+        name=name,
+        run_id=ctx.id,
+        out_dir=ctx.out,
+        config_path=ctx.out / "config.yaml",
+        cfg=serialize_cfg(cfg),
+    )
 
 
 def experiment(*, name):

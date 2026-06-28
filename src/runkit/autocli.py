@@ -13,6 +13,7 @@ import dataclasses
 import inspect
 import sys
 
+from . import ui
 from .config import build_cfg, deep_merge, parse_overrides, split_argv
 from .utils import load_yaml, resolve_config_path
 
@@ -40,9 +41,7 @@ def main(run, argv=None):
         sys.exit(str(e))
 
     if dry:
-        print(f"[dry-run] config file = {config_file}")
-        print(f"[dry-run] cfg = {dataclasses.asdict(cfg)}")
-        print(f"[dry-run] flags = {flags}")
+        ui.dry_run(config_file=config_file, cfg=dataclasses.asdict(cfg), flags=flags)
         return
 
     return run(cfg, **flags)            # flags are exactly the staging kwargs

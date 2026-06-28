@@ -6,7 +6,6 @@ and the best-effort return-value dump.
 import dataclasses
 import json
 import pathlib
-import sys
 
 import numpy as np
 import yaml
@@ -77,6 +76,6 @@ def dump_retval(results_dir, value):
             out.write_text(json.dumps(value, indent=2, default=str))
         return out
     except Exception as e:                                   # noqa: BLE001 (best-effort)
-        print(f"[runkit] could not serialize return value "
-              f"({type(value).__name__}): {e}", file=sys.stderr)
+        from . import ui
+        ui.warn(f"could not serialize return value ({type(value).__name__}): {e}")
         return None
