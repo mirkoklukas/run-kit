@@ -12,6 +12,7 @@ import dataclasses
 import datetime
 import functools
 import pathlib
+import sys
 import uuid
 
 import yaml
@@ -58,6 +59,23 @@ def init_run(cfg, *, name, tag, runs_dir, out):
     return RunContext(out=out_path, id=uid)
 
 
+def _announce(name, cfg, ctx):
+    """Print a one-time start banner: which run, with what config, where.
+
+    Goes to stderr so it never mixes into data an experiment writes to stdout.
+    The resolved config is echoed inline; the same values are frozen at
+    `{out}/config.yaml`.
+    """
+    cfg_inline = yaml.safe_dump(
+        serialize_cfg(cfg), default_flow_style=True, sort_keys=False).strip()
+    for line in (
+        f"[runkit] starting {name!r}  (id={ctx.id})",
+        f"[runkit] out:    {ctx.out}",
+        f"[runkit] config: {ctx.out / 'config.yaml'}  {cfg_inline}",
+    ):
+        print(line, file=sys.stderr)
+
+
 def experiment(*, name):
     """Mark `run(cfg, ctx)` as an experiment entry point.
 
@@ -69,6 +87,7 @@ def experiment(*, name):
         @functools.wraps(f)
         def wrapper(cfg, *, tag=None, runs_dir="runs", out=None):
             ctx = init_run(cfg, name=name, tag=tag, runs_dir=runs_dir, out=out)
+            _announce(name, cfg, ctx)
             result = f(cfg, ctx)
             if result is not None:
                 dump_retval(ctx.out / "results", result)
