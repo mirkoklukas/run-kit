@@ -65,6 +65,16 @@ def test_config_precedence(tmp_path):
     assert cfg == {"seed": 9, "lr": 0.01, "note": "from-yaml"}
 
 
+def test_yaml_exponent_cast_to_annotated_float(tmp_path):
+    """`1e-4` has no dot, so yaml loads it as a str; the float annotation casts it."""
+    cfg_yaml = tmp_path / "c.yaml"
+    cfg_yaml.write_text("lr: 1e-4\n")
+    assert yaml.safe_load(cfg_yaml.read_text())["lr"] == "1e-4"   # the gotcha
+    main(run, [str(cfg_yaml), f"--runs-dir={tmp_path}"])
+    retval = json.loads((_only_run_dir(tmp_path) / "results" / "retval.json").read_text())
+    assert retval["lr"] == 1e-4 and isinstance(retval["lr"], float)
+
+
 def test_out_override_exact_path(tmp_path):
     out = tmp_path / "exactdir"
     main(run, [f"--out={out}"])

@@ -7,6 +7,7 @@ Two namespaces, strictly disjoint:
 Pure functions; no IO, no globals. Tested in isolation.
 """
 import dataclasses
+import types
 import typing
 
 
@@ -115,5 +116,54 @@ def build_cfg(cls, overrides):
         if isinstance(v, dict) and dataclasses.is_dataclass(t):
             kwargs[k] = build_cfg(t, v)
         else:
-            kwargs[k] = v
+            kwargs[k] = _cast(t, v)
     return cls(**kwargs)
+
+
+def _unwrap_optional(t):
+    """`Optional[X]` / `X | None` -> X; other unions and plain types pass through."""
+    if typing.get_origin(t) in (typing.Union, types.UnionType):
+        args = [a for a in typing.get_args(t) if a is not type(None)]
+        if len(args) == 1:
+            return args[0]
+    return t
+
+
+def _cast(t, v):
+    """Coerce `v` to the field's annotated scalar type `t`, when it's safe to.
+
+    The point of failure this fixes: YAML 1.1 only reads a float when the
+    mantissa has a dot, so `1e-4` loads as the *string* "1e-4". A `float`
+    annotation lets us recover the intended value. Only the scalar leaf types are
+    touched; containers, dataclasses, and anything we can't convert pass through
+    unchanged, so a genuinely wrong value still surfaces at `cls(**kwargs)`.
+    """
+    t = _unwrap_optional(t)
+    if v is None or not isinstance(t, type) or isinstance(v, t):
+        return v
+    if t is bool:
+        return _coerce(v) if isinstance(v, str) else v
+    if t is int:
+        return _to_int(v)
+    if t in (float, str):
+        try:
+            return t(v)
+        except (TypeError, ValueError):
+            return v
+    return v
+
+
+def _to_int(v):
+    """`int(v)`, but also accept exponent strings yaml leaves as text (`1e3`).
+
+    Such a value is read through `float` first; it's only taken as an int when it
+    lands on a whole number (`1e3` -> 1000, but `1.5e0` passes through untouched).
+    """
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return v
+        return int(f) if f.is_integer() else v
