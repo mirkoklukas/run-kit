@@ -29,7 +29,8 @@ class RunContext:
 def _resolve_out(runs_dir, name, tag, hex8, out_override):
     """Build the run dir path -- the one place the naming scheme lives.
 
-    default: {runs_dir}/{name}[_{tag}]_{date}_{time}_{hex8}/
+    default: {runs_dir}/{date}_{time}_{name}[_{tag}]_{hex8}/
+             (date=YYYY-MM-DD, time=HH-MM)
     --out:   that exact dir; on collision, append _{timestamp}.
     """
     if out_override is not None:
@@ -39,7 +40,7 @@ def _resolve_out(runs_dir, name, tag, hex8, out_override):
             p = p.parent / f"{p.name}_{ts}"
         return p
     now = datetime.datetime.now()
-    parts = [name, *([tag] if tag else []), f"{now:%Y-%m-%d}", f"{now:%H-%M-%S}", hex8]
+    parts = [f"{now:%Y-%m-%d}", f"{now:%H-%M}", name, *([tag] if tag else []), hex8]
     return pathlib.Path(runs_dir).resolve() / "_".join(parts)
 
 

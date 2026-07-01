@@ -4,6 +4,7 @@ Each test drives `autocli.main(run, argv)` with an explicit argv and a tmp
 `--runs-dir`, then asserts on the produced run dir. Run with: `uv run --extra dev pytest`.
 """
 import json
+import re
 from dataclasses import dataclass
 
 import numpy as np
@@ -47,7 +48,8 @@ def _only_run_dir(runs_dir):
 def test_run_dir_structure_and_naming(tmp_path):
     main(run, ["seed=5", "--tag=t1", f"--runs-dir={tmp_path}"])
     d = _only_run_dir(tmp_path)
-    assert d.name.startswith("mock_t1_")           # {name}_{tag}_{date}_{time}_{hex8}
+    # {date}_{time}_{name}_{tag}_{hex8}  (date=YYYY-MM-DD, time=HH-MM)
+    assert re.match(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}_mock_t1_", d.name)
     hex8 = d.name.split("_")[-1]
     assert len(hex8) == 8
     assert (d / "config.yaml").is_file()
