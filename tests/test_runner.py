@@ -4,6 +4,7 @@ Each test drives `autocli.main(run, argv)` with an explicit argv and a tmp
 `--runs-dir`, then asserts on the produced run dir. Run with: `uv run --extra dev pytest`.
 """
 import json
+import pathlib
 import re
 from dataclasses import dataclass
 
@@ -84,6 +85,30 @@ def test_out_override_exact_path(tmp_path):
     assert (out / "marker.txt").is_file()
 
 
+def test_out_collision_appends_timestamp_without_force(tmp_path):
+    out = tmp_path / "exactdir"
+    main(run, ["seed=1", f"--out={out}"])
+    main(run, ["seed=2", f"--out={out}"])          # collides -> sibling with _{ts}
+    assert (out / "marker.txt").read_text() == "1"  # first run untouched
+    siblings = [p for p in tmp_path.iterdir() if p.is_dir() and p != out]
+    assert len(siblings) == 1 and (siblings[0] / "marker.txt").read_text() == "2"
+
+
+def test_force_replaces_existing_out_dir(tmp_path):
+    out = tmp_path / "exactdir"
+    main(run, ["seed=1", f"--out={out}"])
+    (out / "stale.txt").write_text("old")           # leftover from the first run
+    main(run, ["seed=2", f"--out={out}", "-f"])      # -f -> reuse exact path, fresh
+    assert [p for p in tmp_path.iterdir() if p.is_dir()] == [out]  # no sibling
+    assert (out / "marker.txt").read_text() == "2"
+    assert not (out / "stale.txt").exists()          # dir was wiped, not merged
+
+
+def test_short_flag_f_aliases_force(tmp_path):
+    from runkit.config import split_argv
+    assert split_argv(["-f"]) == ([], {"force": True}, [])
+
+
 def test_unknown_flag_is_rejected(tmp_path):
     with pytest.raises(SystemExit):
         main(run, [f"--runs-dir={tmp_path}", "--bogus=1"])
@@ -112,6 +137,21 @@ def test_resolve_config_path():
     assert resolve_config_path("cwd:foo.yaml", "/exp") == "foo.yaml"      # explicit cwd
     assert resolve_config_path("exp:foo.yaml", "/exp") == "/exp/foo.yaml"  # experiment dir
     assert resolve_config_path("/abs/foo.yaml", "/exp") == "/abs/foo.yaml"  # absolute
-    assert resolve_config_path("weird:foo.yaml", "/exp") == "weird:foo.yaml"  # unknown scheme
+    assert resolve_config_path("C:\\x\\foo.yaml", "/exp") == "C:\\x\\foo.yaml"  # not a scheme
+    assert resolve_config_path("weird:foo.yaml", "/exp") == "weird:foo.yaml"  # undefined scheme
     with pytest.raises(ValueError):
         resolve_config_path("exp:foo.yaml", None)
+
+
+def test_resolve_config_path_env_scheme(monkeypatch):
+    monkeypatch.setenv("RUNKIT_PATH_CTK", "/ctk")
+    assert resolve_config_path("ctk:configs/x.yaml", "/exp") == "/ctk/configs/x.yaml"
+    monkeypatch.setenv("RUNKIT_PATH_HOMEISH", "~/base")
+    assert resolve_config_path("homeish:x.yaml", None) == str(
+        pathlib.Path(pathlib.Path.home() / "base" / "x.yaml"))
+
+
+def test_resolve_config_path_undefined_scheme_warns(capsys, monkeypatch):
+    monkeypatch.delenv("RUNKIT_PATH_CTK", raising=False)
+    assert resolve_config_path("ctk:x.yaml", "/exp") == "ctk:x.yaml"  # env unset -> literal
+    assert "no base is defined" in capsys.readouterr().err

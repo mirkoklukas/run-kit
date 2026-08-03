@@ -8,3 +8,5 @@ runs/
 dist/
 build/
 .DS_Store
+.claude/settings.local.json
+.pytest_cache/

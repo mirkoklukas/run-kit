@@ -69,7 +69,14 @@ Config path resolution:
 /abs/path         →  used as-is
 NAME or cwd:NAME  →  relative to cwd (no prefix = cwd)
 exp:NAME          →  relative to the experiment's dir
+SCHEME:NAME       →  relative to $RUNKIT_PATH_<SCHEME> (user-defined base)
 ```
+
+`cwd:` and `exp:` are built in. Any other scheme is user-defined: `ctk:x.yaml`
+resolves against the env var `RUNKIT_PATH_CTK` (scheme uppercased). `~` in the
+base is expanded. If the env var is unset the token is left as a literal path,
+with a warning to catch typo'd schemes. Pairs well with `direnv` for per-project
+bases (put `export RUNKIT_PATH_CTK=...` in an `.envrc`).
 
 ## Flags (context)
 

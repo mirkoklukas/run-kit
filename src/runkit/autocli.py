@@ -110,6 +110,9 @@ def _help_text(run):
         lines.append(f"  {fld.name}={fld.default!r}")
     lines += ["", "staging flags (--flag):"]
     for flag in sorted(_staging_flags(run)):
-        lines.append(f"  --{flag.replace('_', '-')}")
-    lines += ["  --config=PATH   (cwd:/exp:/abs)", "  --dry-run"]
+        rendered = f"--{flag.replace('_', '-')}"
+        if flag == "force":
+            rendered = f"-f, {rendered}   (with --out: replace the dir if it exists)"
+        lines.append(f"  {rendered}")
+    lines += ["  --config=PATH   (cwd:/exp:/SCHEME:/abs)", "  --dry-run"]
     return "\n".join(lines)

@@ -35,18 +35,18 @@ runkit run experiment.py [config.yaml] [key=value ...] [--flag ...]
 
 - bare `key=value` → overrides into **config** (the "what")
 - `--flag=value` → sets **staging** (the "how/where"): `--tag`, `--runs-dir`, `--out`
-- config paths resolve as `cwd:NAME` (default) / `exp:NAME` (next to the experiment) / `/abs`
+- config paths resolve as `cwd:NAME` (default) / `exp:NAME` (next to the experiment) / `/abs`,
+  plus user-defined `SCHEME:NAME` bases via `$RUNKIT_PATH_<SCHEME>` (e.g. `ctk:x.yaml` → `$RUNKIT_PATH_CTK/x.yaml`)
 
 Run dirs land at `{runs_dir}/{name}[_{tag}]_{date}_{time}_{hex8}/`, with the run
 `id = {name}_{hex8}` (greppable in `results`/`config.yaml`). See `design.md`.
 
 ## Layout
 
-- `src/runkit/` — `exp` (decorator), `autocli` (the CLI core), `utils`, `cli`, `config`.
-- `src/runkit/old/` — the pre-redesign implementation (provenance, dirty-gate,
-  context yaml), archived for reference and not wired into the API.
+- `src/runkit/` — `exp` (decorator), `autocli` (the CLI core), `utils`, `cli`,
+  `config`, `ui`.
 
 ## Status
 
-Early. Provenance and the dirty-git gate from the old implementation are not yet
-ported to the lightweight runner. See `design.md` for the plan.
+Early. Provenance and a dirty-git gate are not yet part of the lightweight
+runner. See `design.md` for the plan.

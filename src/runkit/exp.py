@@ -3,7 +3,7 @@
 A decorated function is `run(cfg, ctx)`. The decorator wraps it so that, before
 the body runs, a fresh run dir is created and the resolved config frozen into it;
 after, a non-`None` return value is dumped into the run dir. Staging is driven by
-keyword args (the CLI flags): `tag`, `runs_dir`, `out`.
+keyword args (the CLI flags): `tag`, `runs_dir`, `out`, `force`.
 
 The decorator carries only the experiment's *identity* (`name`); everything that
 stages an attempt is a flag. See design.md.
@@ -12,6 +12,7 @@ import dataclasses
 import datetime
 import functools
 import pathlib
+import shutil
 import uuid
 
 import yaml
@@ -26,16 +27,17 @@ class RunContext:
     id: str             # stable unique run id, e.g. "baseline_a3f9c1e7" (for search)
 
 
-def _resolve_out(runs_dir, name, tag, hex8, out_override):
+def _resolve_out(runs_dir, name, tag, hex8, out_override, force):
     """Build the run dir path -- the one place the naming scheme lives.
 
     default: {runs_dir}/{date}_{time}_{name}[_{tag}]_{hex8}/
              (date=YYYY-MM-DD, time=HH-MM)
-    --out:   that exact dir; on collision, append _{timestamp}.
+    --out:   that exact dir. On collision, append _{timestamp} -- unless `force`,
+             which keeps the exact path (the existing dir is replaced in init_run).
     """
     if out_override is not None:
         p = pathlib.Path(out_override).resolve()
-        if p.exists():
+        if p.exists() and not force:
             ts = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             p = p.parent / f"{p.name}_{ts}"
         return p
@@ -44,15 +46,21 @@ def _resolve_out(runs_dir, name, tag, hex8, out_override):
     return pathlib.Path(runs_dir).resolve() / "_".join(parts)
 
 
-def init_run(cfg, *, name, tag, runs_dir, out):
+def init_run(cfg, *, name, tag, runs_dir, out, force=False):
     """Create the run dir, dump the resolved config, return a RunContext.
 
     The run id and the dir's `{hex8}` share one uuid, so the dir is
-    self-identifying (`id = {name}_{hex8}`).
+    self-identifying (`id = {name}_{hex8}`). `force` only bites with an explicit
+    `--out` whose dir already exists: that dir is removed and rebuilt fresh.
     """
+    if force and out is None:
+        ui.warn("--force has no effect without --out (default run dirs never collide)")
     hex8 = uuid.uuid4().hex[:8]
     uid = f"{name}_{hex8}"
-    out_path = _resolve_out(runs_dir, name, tag, hex8, out)
+    out_path = _resolve_out(runs_dir, name, tag, hex8, out, force)
+    if force and out_path.exists():
+        shutil.rmtree(out_path)
+        ui.warn(f"--force: replaced existing run dir {out_path}")
     out_path.mkdir(parents=True, exist_ok=False)
     (out_path / "results").mkdir()
     (out_path / "config.yaml").write_text(
@@ -79,13 +87,15 @@ def experiment(*, name):
     """Mark `run(cfg, ctx)` as an experiment entry point.
 
     `name` is the experiment's identity (required, no CLI override). The wrapper
-    accepts the staging flags as keyword args -- `tag`, `runs_dir`, `out` -- which
-    `autocli.main` forwards from the CLI; their names *are* the allowed flags.
+    accepts the staging flags as keyword args -- `tag`, `runs_dir`, `out`, `force`
+    -- which `autocli.main` forwards from the CLI; their names *are* the allowed
+    flags.
     """
     def decorator(f):
         @functools.wraps(f)
-        def wrapper(cfg, *, tag=None, runs_dir="runs", out=None):
-            ctx = init_run(cfg, name=name, tag=tag, runs_dir=runs_dir, out=out)
+        def wrapper(cfg, *, tag=None, runs_dir="runs", out=None, force=False):
+            ctx = init_run(
+                cfg, name=name, tag=tag, runs_dir=runs_dir, out=out, force=force)
             _announce(name, cfg, ctx)
             result = f(cfg, ctx)
             if result is not None:

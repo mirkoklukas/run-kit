@@ -7,9 +7,6 @@ or `runkit run experiment.py ...` — all share `runkit.autocli.main`.
 
 Two disjoint namespaces: config (the "what") via `key=value`; staging (the
 "how/where") via `--flags` (`--tag`, `--runs-dir`, `--out`). See design.md.
-
-The pre-redesign implementation (provenance, dirty-gate, context yaml) is
-archived under `runkit.old`, not wired into this API.
 """
 from .exp import experiment, RunContext, init_run
 from .autocli import main

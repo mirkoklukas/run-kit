@@ -5,34 +5,64 @@ and the best-effort return-value dump.
 """
 import dataclasses
 import json
+import os
 import pathlib
+import re
 
 import numpy as np
 import yaml
 
 # Config-path schemes: the optional prefix that picks what a *relative* path is
-# resolved against. `cwd:` (or no prefix) -> cwd; `exp:` -> the experiment's dir.
-_PATH_SCHEMES = ("cwd", "exp")
+# resolved against. Two are built in -- `cwd:` (or no prefix) -> cwd, `exp:` ->
+# the experiment's dir -- and any other scheme is user-defined via an env var
+# `RUNKIT_PATH_<SCHEME>` (uppercased), whose value is the base dir. So exporting
+# `RUNKIT_PATH_CTK=~/control-kit` makes `ctk:configs/x.yaml` resolve there.
+_BUILTIN_SCHEMES = ("cwd", "exp")
+_ENV_PREFIX = "RUNKIT_PATH_"
+
+# A token that *looks* like a scheme use we should have recognized: a short,
+# all-alphanumeric prefix before the first ':' (so we can warn on a typo'd
+# scheme without mistaking `C:\...` or `https://...` for one).
+_SCHEME_LIKE = re.compile(r"^[A-Za-z0-9_]+$")
+
+
+def _env_base(scheme):
+    """Base dir for a user-defined scheme, or None if `RUNKIT_PATH_<SCHEME>` unset."""
+    raw = os.environ.get(_ENV_PREFIX + scheme.upper())
+    return os.path.expanduser(raw) if raw else None
 
 
 def resolve_config_path(raw, exp_dir):
-    """Expand an optional `cwd:` / `exp:` scheme prefix on a config path.
+    """Expand an optional `SCHEME:` prefix on a config path.
 
     cwd:NAME / bare NAME -> left relative to cwd (the default).
     exp:NAME             -> joined onto the experiment dir (`exp_dir`).
-    Absolute paths, and any token whose prefix isn't a known scheme (so a stray
-    ':' in a filename), are returned untouched.
+    ctk:NAME (any other) -> joined onto `RUNKIT_PATH_CTK` if that env var is set.
+    Absolute paths, and any token whose prefix isn't a known/defined scheme (so a
+    stray ':' in a filename), are returned untouched -- though a prefix that looks
+    like a scheme yet has no base gets a warning, to catch typos.
     """
     scheme, sep, rest = raw.partition(":")
-    if not sep or scheme not in _PATH_SCHEMES:
+    if not sep:
         return raw
+    if scheme == "cwd":
+        return rest      # strip the prefix, leave it cwd-relative
     if scheme == "exp":
         if exp_dir is None:
             raise ValueError(
                 "config path uses the 'exp:' base, but the experiment dir is "
                 "unknown (is `run` defined in the experiment module?)")
         return str(pathlib.Path(exp_dir) / rest)
-    return rest      # 'cwd:' -> strip the prefix, leave it cwd-relative
+    base = _env_base(scheme)
+    if base is not None:
+        return str(pathlib.Path(base) / rest)
+    if _SCHEME_LIKE.match(scheme):
+        from . import ui
+        ui.warn(
+            f"path '{raw}' looks like it uses a '{scheme}:' base, but no base is "
+            f"defined for it (set {_ENV_PREFIX}{scheme.upper()}); treating it as a "
+            "literal path")
+    return raw
 
 
 def load_yaml(path):
