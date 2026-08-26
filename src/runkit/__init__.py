@@ -8,7 +8,7 @@ or `runkit run experiment.py ...` — all share `runkit.autocli.main`.
 Two disjoint namespaces: config (the "what") via `key=value`; staging (the
 "how/where") via `--flags` (`--tag`, `--runs-dir`, `--out`). See design.md.
 """
-from .exp import experiment, RunContext, init_run
+from .exp import experiment, Run, RunContext, init_run
 from .autocli import main
 
-__all__ = ["experiment", "RunContext", "init_run", "main"]
+__all__ = ["experiment", "Run", "RunContext", "init_run", "main"]

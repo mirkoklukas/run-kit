@@ -13,7 +13,6 @@ import dataclasses
 import inspect
 import sys
 
-from . import ui
 from .config import build_cfg, deep_merge, parse_overrides, split_argv
 from .utils import load_yaml, resolve_config_path
 
@@ -35,14 +34,9 @@ def main(run, argv=None):
         base = load_yaml(config_file) if config_file else {}
         cfg = build_cfg(_cfg_type(run), deep_merge(base, parse_overrides(cfg_tokens)))
 
-        dry = flags.pop("dry_run", False)
         _check_flags(run, flags)        # reject unknown --flags before we run
     except (ValueError, TypeError) as e:
         sys.exit(str(e))
-
-    if dry:
-        ui.dry_run(config_file=config_file, cfg=dataclasses.asdict(cfg), flags=flags)
-        return
 
     return run(cfg, **flags)            # flags are exactly the staging kwargs
 
@@ -114,5 +108,5 @@ def _help_text(run):
         if flag == "force":
             rendered = f"-f, {rendered}   (with --out: replace the dir if it exists)"
         lines.append(f"  {rendered}")
-    lines += ["  --config=PATH   (cwd:/exp:/SCHEME:/abs)", "  --dry-run"]
+    lines += ["  --config=PATH   (cwd:/exp:/SCHEME:/abs)"]
     return "\n".join(lines)

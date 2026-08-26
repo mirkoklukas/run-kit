@@ -2,9 +2,10 @@
 
 Two shared Consoles: `err` (stderr) for runkit's own chatter -- the start banner,
 warnings, status -- so it never lands on stdout where an experiment may be writing
-data; and `out` (stdout) for output the user explicitly asked to see (`--dry-run`).
+data; and `out` (stdout) for output the user explicitly asked to see, i.e. a
+command whose whole point is the text it prints.
 
-`run_started` / `dry_run` are the panels runkit prints itself. The rest is a small
+`run_started` is the panel runkit prints itself. The rest is a small
 vocabulary of line helpers (`line`, `title`, `ok`, `warn`, `done`, ...) for ad-hoc
 output, all left-padded by `PADDING_LEFT` so they line up.
 """
@@ -111,13 +112,3 @@ def run_started(*, name, run_id, out_dir, config_path, cfg):
     )
     err.print(Panel(body, title=f"▶ runkit · {name}", title_align="left",
                     border_style="green", expand=False))
-
-
-def dry_run(*, config_file, cfg, flags):
-    """Print the resolved plan for `--dry-run` (to stdout -- it's the deliverable)."""
-    body = Group(
-        _kv([("config file", config_file), ("flags", flags or "{}")]),
-        "", _cfg_block(cfg),
-    )
-    out.print(Panel(body, title="runkit · dry-run", title_align="left",
-                    border_style="yellow", expand=False))

@@ -2,7 +2,6 @@
 
     uv run python example.py seed=7 --tag=demo
     uv run runkit run example.py seed=7 --tag=demo
-    uv run python example.py --dry-run          # resolve + print, no run dir
 
 Runs land in ./runs/<name>[_<tag>]_<date>_<time>_<hex8>/ (gitignored).
 """
