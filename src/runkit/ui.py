@@ -101,13 +101,13 @@ def _cfg_block(cfg):
     return Syntax(text, "yaml", background_color="default")
 
 
-def run_started(*, name, run_id, out_dir, config_path, cfg):
+def run_started(*, name, run_id, run_dir, config_path, cfg):
     """Print the start banner: which run, where it writes, with what config.
 
     `cfg` is a plain dict (the resolved config, also frozen at `config_path`).
     """
     body = Group(
-        _kv([("id", run_id), ("out", out_dir), ("config", config_path)]),
+        _kv([("id", run_id), ("dir", run_dir), ("config", config_path)]),
         "", _cfg_block(cfg),
     )
     err.print(Panel(body, title=f"▶ runkit · {name}", title_align="left",

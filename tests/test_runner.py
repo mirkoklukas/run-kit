@@ -1,7 +1,7 @@
 """Behavior tests for the runkit lightweight runner.
 
 Each test drives `autocli.main(run, argv)` with an explicit argv and a tmp
-`--runs-dir`, then asserts on the produced run dir. Run with: `uv run --extra dev pytest`.
+`--root`, then asserts on the produced run dir. Run with: `uv run --extra dev pytest`.
 """
 import json
 import pathlib
@@ -14,6 +14,7 @@ import yaml
 
 from runkit import Run, RunContext, experiment, init_run
 from runkit.autocli import main
+from runkit.config import build_cfg
 from runkit.utils import resolve_config_path
 
 
@@ -28,6 +29,12 @@ class Cfg:
 def run(cfg: Cfg, ctx: RunContext):
     (ctx.out / "marker.txt").write_text(str(cfg.seed))
     return {"seed": cfg.seed, "lr": cfg.lr}
+
+
+@experiment(name="deferred")
+def str_ann_run(cfg: "Cfg", ctx: RunContext):
+    """As under `from __future__ import annotations`: `cfg`'s annotation is a string."""
+    return {"seed": cfg.seed}
 
 
 @experiment(name="silent")
@@ -50,22 +57,28 @@ def interrupted_run(cfg: Cfg, ctx: RunContext):
     raise KeyboardInterrupt
 
 
-def _only_run_dir(runs_dir):
-    dirs = [p for p in runs_dir.iterdir() if p.is_dir()]
+def _run_dirs(root):
+    """All run dirs under `root`, across experiments -- `latest` links excluded."""
+    return [p for p in root.glob("*/*") if p.is_dir() and not p.is_symlink()]
+
+
+def _only_run_dir(root):
+    dirs = _run_dirs(root)
     assert len(dirs) == 1, f"expected exactly one run dir, got {dirs}"
     return dirs[0]
 
 
 def test_run_dir_structure_and_naming(tmp_path):
-    main(run, ["seed=5", "--tag=t1", f"--runs-dir={tmp_path}"])
+    main(run, ["seed=5", "--tag=t1", f"--root={tmp_path}"])
     d = _only_run_dir(tmp_path)
-    # {date}_{time}_{name}_{tag}_{hex8}  (date=YYYY-MM-DD, time=HH-MM)
-    assert re.match(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}_mock_t1_", d.name)
+    # {root}/{name}/{date}_{time}_{tag}_{hex8}  (date=YYYY-MM-DD, time=HH-MM-SS)
+    assert d.parent == tmp_path / "mock"
+    assert re.match(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_t1_[0-9a-f]{8}$", d.name)
     hex8 = d.name.split("_")[-1]
     assert len(hex8) == 8
     assert (d / "config.yaml").is_file()
-    assert (d / "marker.txt").read_text() == "5"
-    retval = json.loads((d / "results" / "retval.json").read_text())
+    assert (d / "out" / "marker.txt").read_text() == "5"   # the body writes under out/
+    retval = json.loads((d / "retval.json").read_text())
     assert retval == {"seed": 5, "lr": 3e-4}
 
 
@@ -73,7 +86,7 @@ def test_config_precedence(tmp_path):
     """dataclass defaults < config.yaml < key=value."""
     cfg_yaml = tmp_path / "c.yaml"
     cfg_yaml.write_text("lr: 0.01\nnote: from-yaml\n")
-    main(run, [str(cfg_yaml), "seed=9", f"--runs-dir={tmp_path}"])
+    main(run, [str(cfg_yaml), "seed=9", f"--root={tmp_path}"])
     cfg = yaml.safe_load((_only_run_dir(tmp_path) / "config.yaml").read_text())
     assert cfg == {"seed": 9, "lr": 0.01, "note": "from-yaml"}
 
@@ -83,57 +96,33 @@ def test_yaml_exponent_cast_to_annotated_float(tmp_path):
     cfg_yaml = tmp_path / "c.yaml"
     cfg_yaml.write_text("lr: 1e-4\n")
     assert yaml.safe_load(cfg_yaml.read_text())["lr"] == "1e-4"   # the gotcha
-    main(run, [str(cfg_yaml), f"--runs-dir={tmp_path}"])
-    retval = json.loads((_only_run_dir(tmp_path) / "results" / "retval.json").read_text())
+    main(run, [str(cfg_yaml), f"--root={tmp_path}"])
+    retval = json.loads((_only_run_dir(tmp_path) / "retval.json").read_text())
     assert retval["lr"] == 1e-4 and isinstance(retval["lr"], float)
 
 
-def test_out_override_exact_path(tmp_path):
-    out = tmp_path / "exactdir"
-    main(run, [f"--out={out}"])
-    assert (out / "config.yaml").is_file()
-    assert (out / "marker.txt").is_file()
-
-
-def test_out_collision_appends_timestamp_without_force(tmp_path):
-    out = tmp_path / "exactdir"
-    main(run, ["seed=1", f"--out={out}"])
-    main(run, ["seed=2", f"--out={out}"])          # collides -> sibling with _{ts}
-    assert (out / "marker.txt").read_text() == "1"  # first run untouched
-    siblings = [p for p in tmp_path.iterdir() if p.is_dir() and p != out]
-    assert len(siblings) == 1 and (siblings[0] / "marker.txt").read_text() == "2"
-
-
-def test_force_replaces_existing_out_dir(tmp_path):
-    out = tmp_path / "exactdir"
-    main(run, ["seed=1", f"--out={out}"])
-    (out / "stale.txt").write_text("old")           # leftover from the first run
-    main(run, ["seed=2", f"--out={out}", "-f"])      # -f -> reuse exact path, fresh
-    assert [p for p in tmp_path.iterdir() if p.is_dir()] == [out]  # no sibling
-    assert (out / "marker.txt").read_text() == "2"
-    assert not (out / "stale.txt").exists()          # dir was wiped, not merged
-
-
-def test_short_flag_f_aliases_force(tmp_path):
+def test_short_flags_are_flags(tmp_path):
+    """`-x` parses as a flag, so a stray one is rejected rather than taken as a
+    config path."""
     from runkit.config import split_argv
-    assert split_argv(["-f"]) == ([], {"force": True}, [])
+    assert split_argv(["-x"]) == ([], {"x": True}, [])
 
 
 def test_unknown_flag_is_rejected(tmp_path):
     with pytest.raises(SystemExit):
-        main(run, [f"--runs-dir={tmp_path}", "--bogus=1"])
+        main(run, [f"--root={tmp_path}", "--bogus=1"])
 
 
 def test_none_return_writes_no_retval(tmp_path):
-    main(none_run, [f"--runs-dir={tmp_path}"])
-    assert not (_only_run_dir(tmp_path) / "results" / "retval.json").exists()
+    main(none_run, [f"--root={tmp_path}"])
+    assert not (_only_run_dir(tmp_path) / "retval.json").exists()
 
 
 def test_ndarray_return_writes_npy(tmp_path):
-    main(arr_run, [f"--runs-dir={tmp_path}"])
+    main(arr_run, [f"--root={tmp_path}"])
     d = _only_run_dir(tmp_path)
-    assert not (d / "results" / "retval.json").exists()
-    assert list(np.load(d / "results" / "retval.npy")) == [0, 1, 2]
+    assert not (d / "retval.json").exists()
+    assert list(np.load(d / "retval.npy")) == [0, 1, 2]
 
 
 def test_resolve_config_path():
@@ -166,7 +155,7 @@ def _yaml(d, name):
 
 
 def test_run_context_and_meta_are_written(tmp_path):
-    main(run, ["--tag=t1", f"--runs-dir={tmp_path}"])
+    main(run, ["--tag=t1", f"--root={tmp_path}"])
     d = _only_run_dir(tmp_path)
     rc = _yaml(d, "run_context.yaml")
     assert rc == {"id": f"mock_{d.name.split('_')[-1]}", "name": "mock"}
@@ -176,12 +165,12 @@ def test_run_context_and_meta_are_written(tmp_path):
 
 
 def test_meta_tag_is_none_without_a_tag(tmp_path):
-    main(run, [f"--runs-dir={tmp_path}"])
+    main(run, [f"--root={tmp_path}"])
     assert _yaml(_only_run_dir(tmp_path), "meta.yaml")["tag"] is None
 
 
 def test_status_ok_on_success(tmp_path):
-    main(run, [f"--runs-dir={tmp_path}"])
+    main(run, [f"--root={tmp_path}"])
     d = _only_run_dir(tmp_path)
     st = _yaml(d, "status.yaml")
     assert st["status"] == "ok"
@@ -193,7 +182,7 @@ def test_status_ok_on_success(tmp_path):
 
 def test_status_failed_and_traceback_on_raise(tmp_path):
     with pytest.raises(ValueError, match="bad shape"):     # propagates untouched
-        main(failing_run, [f"--runs-dir={tmp_path}"])
+        main(failing_run, [f"--root={tmp_path}"])
     d = _only_run_dir(tmp_path)
     st = _yaml(d, "status.yaml")
     assert st["status"] == "failed"
@@ -201,12 +190,12 @@ def test_status_failed_and_traceback_on_raise(tmp_path):
     assert st["duration_s"] >= 0
     tb = (d / "traceback.txt").read_text()
     assert "ValueError: bad shape" in tb and "failing_run" in tb
-    assert not (d / "results" / "retval.json").exists()    # nothing to dump
+    assert not (d / "retval.json").exists()    # nothing to dump
 
 
 def test_status_interrupted_on_ctrl_c(tmp_path):
     with pytest.raises(KeyboardInterrupt):
-        main(interrupted_run, [f"--runs-dir={tmp_path}"])
+        main(interrupted_run, [f"--root={tmp_path}"])
     st = _yaml(_only_run_dir(tmp_path), "status.yaml")
     assert st["status"] == "interrupted"
     assert st["error"] is None                             # a Ctrl-C is not a crash
@@ -214,26 +203,62 @@ def test_status_interrupted_on_ctrl_c(tmp_path):
 
 def test_init_run_writes_no_status(tmp_path):
     """`status` is the body's lifecycle; init_run alone has nothing running."""
-    ctx = init_run(Cfg(), name="x", tag=None, runs_dir=tmp_path, out=None)
-    assert (ctx.out / "run_context.yaml").is_file()
-    assert not (ctx.out / "status.yaml").exists()
+    ctx = init_run(Cfg(), name="x", tag=None, root=tmp_path)
+    assert (ctx.dir / "run_context.yaml").is_file()
+    assert not (ctx.dir / "status.yaml").exists()
 
 
 def test_run_returns_a_run(tmp_path):
-    r = main(run, ["seed=5", f"--runs-dir={tmp_path}"])
+    r = main(run, ["seed=5", f"--root={tmp_path}"])
     assert isinstance(r, Run)
-    assert r.context.out == _only_run_dir(tmp_path)
+    assert r.config == Cfg(seed=5)              # what it ran with, as resolved
+    assert r.context.dir == _only_run_dir(tmp_path)
     assert r.context.name == "mock"
     assert r.retval == {"seed": 5, "lr": 3e-4}
 
 
 def test_run_returns_a_run_with_no_retval(tmp_path):
-    r = main(none_run, [f"--runs-dir={tmp_path}"])
-    assert r.context.out.is_dir() and r.retval is None
+    r = main(none_run, [f"--root={tmp_path}"])
+    assert r.context.dir.is_dir() and r.retval is None
 
 
 def test_driving_runs_from_python_yields_their_dirs(tmp_path):
     """The caller-facing point of `Run`: a sweep knows where its runs landed."""
-    runs = [run(Cfg(seed=s), tag=f"s{s}", runs_dir=tmp_path) for s in (1, 2)]
-    assert [r.retval["seed"] for r in runs] == [1, 2]
-    assert {r.context.out for r in runs} == set(p for p in tmp_path.iterdir())
+    runs = [run(Cfg(seed=s), tag=f"s{s}", root=tmp_path) for s in (1, 2)]
+    assert [(r.config.seed, r.retval["seed"]) for r in runs] == [(1, 1), (2, 2)]
+    assert {r.context.dir for r in runs} == set(_run_dirs(tmp_path))
+
+
+def test_run_config_survives_the_cli_path(tmp_path):
+    """The caller of `main` never sees the Config `autocli` built -- unless
+    `Run` carries it."""
+    r = main(run, ["seed=9", "lr=1e-4", f"--root={tmp_path}"])
+    assert r.config == Cfg(seed=9, lr=1e-4)
+    assert r.config == build_cfg(Cfg, yaml.safe_load(
+        (r.context.dir / "config.yaml").read_text()))   # same as what was frozen
+
+
+def test_string_annotation_resolves_to_the_config_class(tmp_path):
+    r = main(str_ann_run, ["seed=4", f"--root={tmp_path}"])
+    assert r.config == Cfg(seed=4)
+
+
+def test_runkit_owns_the_top_level_and_the_body_owns_out(tmp_path):
+    r = main(run, [f"--root={tmp_path}"])
+    assert r.context.out == r.context.dir / "out"
+    top = {p.name for p in r.context.dir.iterdir()}
+    assert top == {"config.yaml", "run_context.yaml", "meta.yaml", "status.yaml",
+                   "retval.json", "out"}
+    assert [p.name for p in r.context.out.iterdir()] == ["marker.txt"]
+
+
+def test_latest_points_at_the_newest_run(tmp_path):
+    first = run(Cfg(seed=1), root=tmp_path)
+    second = run(Cfg(seed=2), root=tmp_path)
+    latest = tmp_path / "mock" / "latest"
+    assert latest.is_symlink()
+    assert latest.readlink() == pathlib.Path(second.context.dir.name)   # relative
+    assert latest.resolve() == second.context.dir != first.context.dir
+    assert [p.name for p in (tmp_path / "mock").iterdir()
+            if p.name.startswith(".")] == []                          # no tmp link left
+

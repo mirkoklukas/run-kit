@@ -85,8 +85,8 @@ def serialize_cfg(cfg):
     return {"repr": repr(cfg)}
 
 
-def dump_retval(results_dir, value):
-    """Best-effort dump of a run's return value into `results_dir`.
+def dump_retval(run_dir, value):
+    """Best-effort dump of a run's return value into `run_dir`.
 
     `.npy` for a numpy array, otherwise `.json` (with `default=str`, so almost
     anything serializes). Never raises -- a value we can't write is skipped with
@@ -95,14 +95,13 @@ def dump_retval(results_dir, value):
 
     TODO: broaden the type->format dispatch (e.g. `.npz` for a dict of arrays).
     """
-    results_dir = pathlib.Path(results_dir)
-    results_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = pathlib.Path(run_dir)
     try:
         if isinstance(value, np.ndarray):
-            out = results_dir / "retval.npy"
+            out = run_dir / "retval.npy"
             np.save(out, value)
         else:
-            out = results_dir / "retval.json"
+            out = run_dir / "retval.json"
             out.write_text(json.dumps(value, indent=2, default=str))
         return out
     except Exception as e:                                   # noqa: BLE001 (best-effort)

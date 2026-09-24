@@ -5,7 +5,7 @@ the config layers and forwards the staging flags to the decorated run.
 
 Two disjoint namespaces (see design.md):
   bare key=value -> cfg overrides   (the "what")
-  --flag[=value] -> staging flags   (the "how/where": tag, runs_dir, out)
+  --flag[=value] -> staging flags   (the "how/where": tag, root)
 
 Resolution (cfg): dataclass defaults -> config.yaml -> CLI key=value. last wins.
 """
@@ -66,8 +66,8 @@ def _check_flags(run, flags):
 def _staging_flags(run):
     """The keyword-only params of the *wrapper* = the allowed staging flags.
 
-    `follow_wrapped=False` so we read the wrapper's own signature (tag, runs_dir,
-    out), not the underlying run(cfg, ctx) it wraps.
+    `follow_wrapped=False` so we read the wrapper's own signature (tag, root),
+    not the underlying run(cfg, ctx) it wraps.
     """
     sig = inspect.signature(run, follow_wrapped=False)
     return {p.name for p in sig.parameters.values()
@@ -78,8 +78,10 @@ def _cfg_type(run):
     """The dataclass annotated on the wrapped run's `cfg` parameter.
 
     Default `follow_wrapped=True` so this reads the original run(cfg, ctx).
+    `eval_str=True` so a string annotation (`from __future__ import
+    annotations`) resolves to the class rather than its name.
     """
-    sig = inspect.signature(run)
+    sig = inspect.signature(run, eval_str=True)
     if "cfg" not in sig.parameters:
         raise TypeError(f"{getattr(run, '__name__', run)!r} must accept a 'cfg' parameter")
     ann = sig.parameters["cfg"].annotation
@@ -104,9 +106,6 @@ def _help_text(run):
         lines.append(f"  {fld.name}={fld.default!r}")
     lines += ["", "staging flags (--flag):"]
     for flag in sorted(_staging_flags(run)):
-        rendered = f"--{flag.replace('_', '-')}"
-        if flag == "force":
-            rendered = f"-f, {rendered}   (with --out: replace the dir if it exists)"
-        lines.append(f"  {rendered}")
+        lines.append(f"  --{flag.replace('_', '-')}")
     lines += ["  --config=PATH   (cwd:/exp:/SCHEME:/abs)"]
     return "\n".join(lines)

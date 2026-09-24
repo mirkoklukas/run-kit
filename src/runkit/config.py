@@ -11,18 +11,14 @@ import types
 import typing
 
 
-# Single-dash short flags -> their long staging-flag name. Short flags are always
-# boolean (bare `-f`); anything needing a value uses the long `--flag=value` form.
-_SHORT_FLAGS = {"f": "force"}
-
-
 def split_argv(tokens):
     """Split tokens into (cfg_overrides, ctx_flags, positionals).
 
     cfg_overrides: list of "key=value" strings (the cfg layer).
     ctx_flags: dict of {flag_name: value} parsed from --flag / --flag=value /
                --flag value pairs. Bare --flag (and any `-x` short flag) becomes
-               True; `-f` aliases to the long name via `_SHORT_FLAGS`.
+               True, so a stray `-x` is rejected as a flag rather than
+               mistaken for a positional.
     positionals: bare tokens with no leading dash and no '=' (e.g. a config
                  file path). Callers decide what they mean.
     """
@@ -43,7 +39,7 @@ def split_argv(tokens):
                 flags[body.replace("-", "_")] = True
         elif len(t) > 1 and t[0] == "-" and not t[1].isdigit():
             body = t[1:]
-            flags[_SHORT_FLAGS.get(body, body).replace("-", "_")] = True
+            flags[body.replace("-", "_")] = True
         elif "=" in t:
             cfg.append(t)
         else:

@@ -19,11 +19,11 @@ class Config:
 
 @experiment(name="example")
 def run(cfg: Config, ctx: RunContext):
-    print(f"[example] id={ctx.id}  out={ctx.out}")
+    print(f"[example] id={ctx.id}  dir={ctx.dir}")
     ckpt = ctx.out / "checkpoints"
     ckpt.mkdir(parents=True, exist_ok=True)
     (ckpt / "ckpt.txt").write_text(f"seed={cfg.seed} steps={cfg.steps}")
-    return {"seed": cfg.seed, "final_loss": 1.0 / (cfg.steps + 1)}   # -> results/retval.json
+    return {"seed": cfg.seed, "final_loss": 1.0 / (cfg.steps + 1)}   # -> {run dir}/retval.json
 
 
 if __name__ == "__main__":
