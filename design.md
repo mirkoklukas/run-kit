@@ -2,7 +2,8 @@
 
 Lightweight, reproducible experiment runs. You write a `Config` and a
 `run(cfg, ctx)`; runkit turns the script into a CLI, gives every run a fresh
-self-describing directory, and records what the run was and how it went.
+self-describing directory, and records what the run was and how it went. Next to
+the run, an experiment can say how to evaluate a run and how to look at one.
 
 It is deliberately small. Features get added when a real need shows up, not
 before — there is no config composition, no server, no database, and no tracking
@@ -16,12 +17,15 @@ Designs that are proposed but not built live in `proposals.md`.
 
 ### An experiment
 
-An experiment is a python file with a `Config` dataclass and a `run(cfg, ctx)`:
+An experiment is a python file with an `Experiment`, a `Config` dataclass and
+a `run(cfg, ctx)` — plus, optionally, an eval and a viz:
 
 ```python
 # experiment.py
 from dataclasses import dataclass
-from runkit import RunContext, experiment, main
+from runkit import Experiment, RunContext
+
+exp = Experiment("baseline")
 
 
 @dataclass
@@ -31,7 +35,7 @@ class Config:
     steps: int = 1000
 
 
-@experiment(name="baseline")
+@exp.run
 def run(cfg: Config, ctx: RunContext):
     ckpt = ctx.out / "checkpoints"       # ctx.out:  {run dir}/out -- write everything here
     ckpt.mkdir()                         # ctx.id:   unique run id, "baseline_a3f9c1e7"
@@ -39,13 +43,34 @@ def run(cfg: Config, ctx: RunContext):
     return {"loss": 0.31}                # optional -> retval.json
 
 
+@exp.eval                                # optional: process what a run wrote
+def evaluate(cfg: Config, ctx: RunContext):
+    ...                                  # writes under ctx.out, e.g. ctx.out / "eval"
+
+
+@exp.viz                                 # optional: the first thing to look at
+def show(cfg: Config, ctx: RunContext):
+    ...
+
+
 if __name__ == "__main__":
-    main(run)
+    exp.main()
 ```
 
 Two things are required and checked: `Config` must be a dataclass, and the
-`cfg` parameter must carry it as a type annotation — that annotation is how
-runkit knows what to build from the command line.
+run's `cfg` parameter must carry it as a type annotation — that annotation is
+how runkit knows what to build from the command line.
+
+A run-only experiment has a shorthand, and `main(run)` works for it as it
+always has:
+
+```python
+@experiment(name="baseline")             # == Experiment("baseline").run
+def run(cfg: Config, ctx: RunContext): ...
+
+if __name__ == "__main__":
+    main(run)
+```
 
 ### Running it
 
@@ -55,6 +80,13 @@ python experiment.py lr=1e-4 seed=7                   # + overrides
 python experiment.py config.yaml                      # + a config yaml
 python experiment.py config.yaml lr=1e-4 --tag=abl-a  # + a variant label
 python experiment.py --help                           # fields and flags for this experiment
+
+python experiment.py viz                              # look at the latest run
+python experiment.py eval a3f9                        # evaluate the run whose id starts a3f9
+python experiment.py viz --help                       # what viz takes
+
+runkit viz experiment.py                              # the same, via runkit
+runkit viz lab.baseline.experiment                    # ... or by module name
 ```
 
 ### Arguments vs flags
@@ -77,6 +109,33 @@ dotted keys nest into sub-dataclasses:
 ```bash
 python experiment.py optim.lr=1e-4 optim.warmup=100
 ```
+
+Each namespace has the same three layers, last wins, and they never cross — a
+`config.yaml` cannot set `--root`, an `experiment.toml` cannot set `lr`:
+
+| namespace | defaults | file layer | command line |
+| --------- | -------- | ---------- | ------------ |
+| config — the "what" | dataclass defaults | `config.yaml` | `key=value` |
+| staging — the "how/where" | runkit's (`./runs`) | `experiment.toml` | `--flag` |
+
+The differences follow from what each namespace is about:
+
+- **How the file is picked.** A `config.yaml` is named per call. The
+  `experiment.toml` is found by location — the nearest one upward — because the
+  environment belongs to where the code lives, not to one attempt.
+- **What is recorded.** The resolved config is frozen into the run dir: it is
+  what the run *was*. Staging mostly is not: the root is where the run dir sits,
+  the tag goes in `meta.yaml`.
+- **When it is read.** The toml is read before the experiment is imported, so it
+  can set up the process (extras, env vars — see `proposals.md`); the config is
+  needed only once the dataclass exists.
+
+Which is also the rule for what belongs in `experiment.toml`: what is true of
+*every* attempt from that folder (root, extras, env vars). Per-attempt staging
+such as `--tag` stays on the command line. And the file is TOML rather than
+YAML on purpose: `experiment.yaml` next to `config.yaml` files would read as
+"the experiment's config", and TOML is what tool settings use in python projects
+(`pyproject.toml`, `uv.toml`).
 
 ### Config resolution
 
@@ -118,7 +177,7 @@ as `1e3`.
 ```
 --tag=TAG        variant label; becomes part of the run dir name
 --config=PATH    the config yaml (same as the bare positional)
---root=DIR       where run dirs are created (default: ./runs)
+--root=DIR       where run dirs are created (default: experiment.toml, else ./runs)
 ```
 
 The accepted flags are not a hardcoded list — they are the keyword arguments the
@@ -132,13 +191,145 @@ experiment and is reachable through `latest`. Where a known path is needed,
 `{root}/{name}/latest` is one; where a scheduler hands out a folder, pass it as
 `--root`.
 
+### Where runs go: `experiment.toml`
+
+Without `--root`, the root comes from the nearest `experiment.toml` at or above
+the experiment's file, else `./runs` (relative to where you launch from):
+
+```toml
+# lab/rl_env/experiment.toml
+[env]
+root = "ctk:runs"               # every experiment in this folder (and below)
+
+[env.test_policy]               # keyed by the experiment file's stem
+root = "../../runs/policy"      # this experiment only
+```
+
+Precedence: `--root` > `[env.<stem>]` > `[env]` > `./runs`. A path is relative
+to the folder holding `experiment.toml`, or uses a scheme prefix (`ctk:` →
+`$RUNKIT_PATH_CTK`, `exp:` → that same folder). `eval` and `viz` resolve it the
+same way, so they look where the run wrote. `root` is the only key read so far;
+the rest of the file is in `proposals.md`.
+
+```bash
+runkit root                              # the root, resolved from the current folder
+runkit root lab/rl_env                   # ... from that folder
+cd "$(runkit root)"                      # go there
+```
+
+`runkit root` prints the path — only the path, on stdout, so it drops into
+`$(...)`. It cannot `cd` for you: no program can change its parent shell's
+directory. A shell function does it in one word:
+
+```bash
+rkroot() { cd "$(runkit root "$@")"; }   # in ~/.zshrc
+```
+
+From a folder it applies `[env]`; given an experiment file it also applies that
+file's `[env.<stem>]`, so it names exactly the root a run of it would use.
+
+### Verbs: run, eval, viz
+
+The first argument may name a verb; without one, it is `run`. The three roles
+form a pipeline over a run dir:
+
+| verb | what it does | argv after the verb | the body writes |
+| ---- | ------------ | ------------------- | --------------- |
+| `run` | creates a run dir | `[config.yaml] [key=value ...] [--tag] [--root]` | `out/` |
+| `eval` | processes what a run wrote | `[RUN] [--root]` | e.g. `out/eval/` |
+| `viz` | presents a run: "look here first" | `[RUN] [--root]` | e.g. `out/figures/`, the terminal |
+
+`viz` is the experimenter's answer to "how do I check how this went?". Someone
+who does not know how `out/` is laid out — or you, months later — runs it
+instead of reading the code. It is cheap and repeatable; anything expensive
+belongs in `eval`, which `viz` can show the results of, or call.
+
+`RUN` picks one run dir of this experiment:
+
+```
+(nothing)          the latest run under {root}/{name}; for eval, the latest `ok` one
+runs/baseline/...  a run dir (`runs/baseline/latest` works)
+a3f9               a hex prefix of the run's id -- the {hex8} in its dir name
+```
+
+`eval` skips runs that failed or are still going, since there is nothing to
+evaluate; `viz` does not, since a failed run is exactly when you want a look.
+A run dir of a different experiment is refused.
+
+`eval` and `viz` get the same `(cfg, ctx)` as the run did: the config thawed
+from `config.yaml` — no `key=value`, the config is the one the run was made
+with — and the run's `RunContext`. Their `cfg` annotation says which class to
+thaw into; without one, the run's is used.
+
+**One experiment per file.** A file holds one `Experiment`, and its roles are
+registered on it, once each. That is what makes the file a complete answer to
+"what can I do with this experiment".
+
+**`runkit` takes the verb first.** `runkit <verb> experiment.py ...` takes
+after the experiment what `python experiment.py <verb> ...` takes after the
+verb. With `python` the file comes first because it is python's own argument;
+with `runkit` the verb does, which leaves the slot between verb and experiment
+for runkit's own options (none yet — say `runkit run --detach experiment.py`).
+The verb is required there. The experiment may also be a dotted module
+(`runkit viz lab.baseline.experiment`, like `python -m`); runkit imports it and
+finds its one `Experiment` — or the one behind an `@experiment` function.
+
+Two more verbs are built in, for every experiment, and print a path — only the
+path, on stdout — for `cd "$(...)"`:
+
+```bash
+cd "$(runkit root experiment.py)"       # {root}/{name}: this experiment's runs
+cd "$(runkit latest experiment.py)"     # its latest run dir
+python experiment.py latest             # the same, the python way
+```
+
+Both resolve the root as a run does (`--root`, else `experiment.toml`, else
+`./runs`). `root` with an experiment is that experiment's folder *in* the root;
+without one (or with a folder) it is the root itself. `latest` is computed from the run
+dirs (the latest started, as the `latest` link means), not read from the link.
+
+One catch: a bare first argument that is a verb is taken as the verb, so a
+config file named exactly `eval`, `viz`, `root` or `latest` (no extension)
+needs `--config=`.
+
+### What it prints
+
+runkit's own output goes to stderr, so stdout is the experiment's: `2>/dev/null`
+leaves only what the body prints. A run is bracketed by two things:
+
+```
+╭─ ▶ runkit · baseline ─────────────────────────────────╮
+│  id  baseline_a3f9c1e7                                │
+│ tag  abl-a                                            │
+│ dir  runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a │
+│                                                       │
+│ lr: 0.0001                                            │
+│ 2 more at their defaults · all in config.yaml         │
+╰───────────────────────────────────────────────────────╯
+  ...whatever the body prints...
+  ✓ baseline_a3f9c1e7  ok in 3m 12s  → runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a
+```
+
+The banner shows only the config fields that differ from the dataclass defaults
+(as dotted keys, `optim.lr`), since a large config would fill the screen and the
+whole of it is in `config.yaml`. A field without a default always shows.
+
+The closing line is how the run went, how long it took and where it is — so
+the end of a long run answers that without scrolling back. For a failed run it
+is `✗ ... failed after 2.1s (ValueError: bad shape) → .../traceback.txt`,
+printed just before python's own traceback; an interrupted one says so. Like the
+status writes, it is best-effort and never replaces the experiment's exception.
+
+`eval` and `viz` print one header line, `▶ runkit · baseline · viz <run dir>`,
+and then whatever their body prints.
+
 ### What lands on disk
 
 ```
-runs/baseline/2026-06-26_15-40-12_abl-a_a3f9c1e7/
+runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a/
 ├── config.yaml        the resolved config -- what it ran with
 ├── run_context.yaml   id + name -- what it ran as
-├── meta.yaml          tag, script -- how the attempt was staged
+├── meta.yaml          tag, script, module -- how the attempt was staged
 ├── status.yaml        running | ok | failed | interrupted, and how long
 ├── traceback.txt      only if the run raised
 ├── retval.json        the return value, if there was one (.npy for an array)
@@ -172,7 +363,13 @@ name: baseline
 # meta.yaml -- the circumstances (an open bag; grows over time)
 tag: abl-a
 script: /abs/path/to/experiment.py
+module: lab.baseline.experiment   # null for a plain `python experiment.py`
 ```
+
+`script` is the file; `module` is its importable name, which is what re-imports
+a package experiment that uses relative imports. `python -m
+lab.baseline.experiment` records the real name, not `__main__`. A plain script
+has no such name.
 
 ```yaml
 # status.yaml -- the lifecycle; the one file that changes
@@ -219,7 +416,15 @@ runs = [run(Config(lr=lr), tag=f"lr{lr}") for lr in (1e-3, 3e-4, 1e-4)]
 ```
 
 The same staging flags are available as keyword arguments:
-`run(cfg, tag=..., root=...)`.
+`run(cfg, tag=..., root=...)`. The other roles are callable the same way —
+`show(run=None, *, root=...)` picks and opens a run and returns what the body
+returns — and a run dir opens without any role:
+
+```python
+from runkit import load_run
+
+r = load_run("runs/baseline/latest", Config)   # the same Run, rebuilt from disk
+```
 
 ---
 
@@ -262,7 +467,9 @@ Three deliberate choices:
 
 There is deliberately no `status` on `Run`: a failed run raises, so a caller
 holding a `Run` always has one that finished. Status is written to disk for
-*other* processes to read, not for the caller who was there.
+*other* processes to read, not for the caller who was there. The one exception
+is `load_run`, which opens a run dir whatever its status; there, check
+`status.yaml` (open question: whether a loaded `Run` should carry it).
 
 `tag` is likewise absent from `RunContext`. It stages an attempt; it is not the
 run's identity. It lives in `meta.yaml`.
@@ -271,7 +478,9 @@ run's identity. It lives in `meta.yaml`.
 
 ## How it works
 
-The call at the bottom of the script, `main(run)`, is the handoff into runkit:
+The call at the bottom of the script, `exp.main()` (or `main(run)`), is the
+handoff into runkit. It reads an optional verb off the front of argv and passes
+the rest to that verb. For `run`:
 
 1. **argv becomes a `Config`** — the two namespaces are split, the yaml (if any)
    is loaded, `key=value` is merged on top, and the dataclass is built.
@@ -292,18 +501,23 @@ Both of the outcome writers are best-effort, for a sharper reason than the
 retval dump: they run with the experiment's exception in flight, and must never
 replace it with one of runkit's own.
 
+For `eval` and `viz` there is nothing to create: argv names a run (`RUN`), the
+wrapper picks the run dir (`select_run`), rebuilds its `Run` (`load_run`) and
+calls the body with its config and context. Nothing is recorded; the body's
+output goes under `ctx.out`.
+
 ### Run dir naming
 
 ```
-{root}/{name}/{date}_{time}[_{tag}]_{hex8}/
+{root}/{name}/{date}_{time}_{hex8}[_{tag}]/
 {root}/{name}/latest -> the latest started run dir
 ```
 
 ```
 runs/
 └── baseline/
-    ├── 2026-06-26_15-40-12_abl-a_a3f9c1e7/
-    ├── 2026-06-26_15-40-12_abl-b_0e4fb4b9/
+    ├── 2026-06-26_15-40-12_a3f9c1e7_abl-a/
+    ├── 2026-06-26_15-40-12_0e4fb4b9_abl-b-longer-label/
     ├── 2026-06-27_09-02-55_77c1d2aa/
     └── latest -> 2026-06-27_09-02-55_77c1d2aa
 ```
@@ -315,16 +529,26 @@ below that — the date leads the dir name, so a glob already is a date folder
 date. What will eventually produce too many runs for one folder is sweeps, and
 those get grouped by sweep, not by day.
 
-`{time}` is `HH-MM-SS`, so runs started in the same minute (any sweep) still
-sort in the order they started; no counter, which would need a scan of the
-folder at creation and races between parallel launches. `{tag}` is dropped when
-unset. `{hex8}` is the run id's hex (`id = {name}_{hex8}`), so the directory is
-self-identifying and never collides. Built in one place (`_resolve_dir`) so the
-scheme is easy to change.
+`{time}` is `HH-MM-SS`, so runs started in the same minute still sort in the
+order they started (within one second, runkit breaks the tie on when each run's
+`run_context.yaml` was written); no counter, which would need a scan of the
+folder at creation and races between parallel launches. `{hex8}` is the run
+id's hex, so the directory never collides, and the id is in the path — split
+across it: the experiment folder is the name, the dir's `{hex8}` the rest.
 
-With `name` in the folder, the dir name parses: date and time have fixed shapes,
-`{hex8}` is last, and the tag — underscores and all — is whatever sits between.
-`run_context.yaml` and `meta.yaml` stay the source of truth all the same.
+```
+runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a/
+     ^^^^^^^^                     ^^^^^^^^
+     name                         hex8          -> id = baseline_a3f9c1e7
+```
+
+Everything fixed-width comes first and the one free-form part last:
+`{date}_{time}_{hex8}` is always 28 characters, and the tag — dropped when unset,
+underscores and all — is the remainder. So the hex sits in the same column of
+every `ls`, where it is easy to find and copy (`viz a3f9`), a long tag only
+lengthens its own line, and the name parses without guessing. `run_context.yaml`
+and `meta.yaml` stay the source of truth all the same. Built in one place
+(`_resolve_dir`) so the scheme is easy to change.
 
 `latest` is a shortcut for people — `cd runs/baseline/latest`, `tail -f
 runs/baseline/latest/...` — not a record. It points at the latest *started*
@@ -335,15 +559,30 @@ because its run was deleted, nothing is harmed. Nothing in runkit reads it; a
 tool that needs "the latest run" (e.g. the latest `ok` one) computes it from the
 dirs.
 
-### The decorator
+### The `Experiment`
 
 ```python
-@experiment(name="baseline")
+exp = Experiment("baseline")
 ```
 
-`name` is the only argument, and it is required. The decorator describes the
-*experiment* — it travels with the code — so it takes only definition-level
-arguments. Everything that stages an attempt is a flag instead.
+Shaped like a `typer.Typer` app: one object, functions registered on it by
+decorator, and `exp.main()` as the entry point. `name` is its only argument,
+and it is required. It describes the *experiment* — it travels with the code —
+so it takes only definition-level arguments. Everything that stages an attempt
+is a flag instead.
+
+Every role body has the same `(cfg, ctx)` signature; the decorator is what
+changes the calling convention:
+
+| decorator | body you write | decorated callable |
+| --------- | -------------- | ------------------ |
+| `@exp.run` | `run(cfg, ctx)` | `run(cfg, *, tag=..., root=...) -> Run` |
+| `@exp.eval` | `evaluate(cfg, ctx)` | `evaluate(run=None, *, root=...)` |
+| `@exp.viz` | `show(cfg, ctx)` | `show(run=None, *, root=...)` |
+
+`main(run, eval=..., viz=...)` is the same dispatcher as a function: it picks up
+whatever is registered on `run`'s experiment, and `eval=` / `viz=` take plain
+`(cfg, ctx)` bodies.
 
 ---
 
@@ -354,7 +593,8 @@ arguments. Everything that stages an attempt is a flag instead.
   not serialize never fails a run that already did its work.
 - **`script:` is absolute**, so a run dir stops resolving if the repo moves.
   Whatever reads it should take an explicit override and treat the recorded
-  value as a default.
+  value as a default. `module:`, where there is one, does not have that
+  problem -- it resolves wherever the package is importable.
 - **provenance.** `meta.yaml` is the open bag it goes in: git sha, dirty flag,
   host, python version. A dirty-git gate would sit alongside it.
 - **captured stdout.** For a run that died on a cluster three days ago, the log

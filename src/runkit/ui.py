@@ -12,6 +12,7 @@ output, all left-padded by `PADDING_LEFT` so they line up.
 import yaml
 from rich.console import Console, Group
 from rich.live import Live
+from rich.markup import escape
 from rich.padding import Padding
 from rich.panel import Panel
 from rich.spinner import Spinner
@@ -101,14 +102,47 @@ def _cfg_block(cfg):
     return Syntax(text, "yaml", background_color="default")
 
 
-def run_started(*, name, run_id, run_dir, config_path, cfg):
-    """Print the start banner: which run, where it writes, with what config.
+def opened(*, name, verb, run_dir):
+    """One line when eval/viz opens an existing run: which, and for what."""
+    line(f"[bold green]▶ runkit · {name} · {verb}[/bold green]  [dim]{run_dir}[/dim]")
 
-    `cfg` is a plain dict (the resolved config, also frozen at `config_path`).
+
+def run_started(*, name, run_id, run_dir, tag, changes, n_fields):
+    """Print the start banner: which run, where it writes, what it changes.
+
+    Only the config fields that differ from the dataclass defaults are shown
+    (`changes`, dotted keys) -- a large config would otherwise fill the screen,
+    and the whole of it is in `{run_dir}/config.yaml` anyway.
     """
-    body = Group(
-        _kv([("id", run_id), ("dir", run_dir), ("config", config_path)]),
-        "", _cfg_block(cfg),
-    )
+    rows = [("id", run_id), *([("tag", tag)] if tag else []), ("dir", run_dir)]
+    rest = n_fields - len(changes)
+    if not changes:
+        cfg_part = [f"[dim]config: all {n_fields} fields at their defaults[/dim]"]
+    else:
+        note = f"{rest} more at their defaults · " if rest else ""
+        cfg_part = [_cfg_block(changes), f"[dim]{note}all in config.yaml[/dim]"]
+    body = Group(_kv(rows), "", *cfg_part)
     err.print(Panel(body, title=f"▶ runkit · {name}", title_align="left",
                     border_style="green", expand=False))
+
+
+def _duration(seconds):
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    m, s = divmod(int(round(seconds)), 60)
+    if m < 60:
+        return f"{m}m {s:02d}s"
+    h, m = divmod(m, 60)
+    return f"{h}h {m:02d}m"
+
+
+def run_finished(*, run_id, status, duration_s, error, run_dir):
+    """One line at the end of a run: how it went, how long, where it is."""
+    dur, where = _duration(duration_s), escape(str(run_dir))
+    if status == "ok":
+        ok(f"{run_id}  [green]ok[/green] in {dur}  [dim]→ {where}[/dim]")
+    elif status == "interrupted":
+        warn(f"{run_id}  [yellow]interrupted[/yellow] after {dur}  [dim]→ {where}[/dim]")
+    else:
+        fail(f"{run_id}  [red]failed[/red] after {dur}  ({escape(str(error))})  "
+             f"[dim]→ {where}/traceback.txt[/dim]")

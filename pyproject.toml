@@ -17,8 +17,8 @@ classifiers = [
 dependencies = [
     "pyyaml>=6",
     "numpy>=1.26",
-    "typer>=0.26.7",
     "rich>=15.0.0",
+    "tomli>=2; python_version < '3.11'",
 ]
 
 [project.urls]

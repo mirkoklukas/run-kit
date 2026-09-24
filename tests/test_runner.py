@@ -15,6 +15,7 @@ import yaml
 from runkit import Run, RunContext, experiment, init_run
 from runkit.autocli import main
 from runkit.config import build_cfg
+from runkit.runs import dir_hex
 from runkit.utils import resolve_config_path
 
 
@@ -71,11 +72,9 @@ def _only_run_dir(root):
 def test_run_dir_structure_and_naming(tmp_path):
     main(run, ["seed=5", "--tag=t1", f"--root={tmp_path}"])
     d = _only_run_dir(tmp_path)
-    # {root}/{name}/{date}_{time}_{tag}_{hex8}  (date=YYYY-MM-DD, time=HH-MM-SS)
+    # {root}/{name}/{date}_{time}_{hex8}_{tag}  (date=YYYY-MM-DD, time=HH-MM-SS)
     assert d.parent == tmp_path / "mock"
-    assert re.match(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_t1_[0-9a-f]{8}$", d.name)
-    hex8 = d.name.split("_")[-1]
-    assert len(hex8) == 8
+    assert re.match(r"^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_[0-9a-f]{8}_t1$", d.name)
     assert (d / "config.yaml").is_file()
     assert (d / "out" / "marker.txt").read_text() == "5"   # the body writes under out/
     retval = json.loads((d / "retval.json").read_text())
@@ -158,7 +157,7 @@ def test_run_context_and_meta_are_written(tmp_path):
     main(run, ["--tag=t1", f"--root={tmp_path}"])
     d = _only_run_dir(tmp_path)
     rc = _yaml(d, "run_context.yaml")
-    assert rc == {"id": f"mock_{d.name.split('_')[-1]}", "name": "mock"}
+    assert rc == {"id": f"mock_{dir_hex(d)}", "name": "mock"}
     meta = _yaml(d, "meta.yaml")
     assert meta["tag"] == "t1"
     assert meta["script"].endswith("test_runner.py")   # where the @experiment lives
@@ -262,3 +261,87 @@ def test_latest_points_at_the_newest_run(tmp_path):
     assert [p.name for p in (tmp_path / "mock").iterdir()
             if p.name.startswith(".")] == []                          # no tmp link left
 
+
+
+def test_meta_records_the_module(tmp_path):
+    main(run, [f"--root={tmp_path}"])
+    assert _yaml(_only_run_dir(tmp_path), "meta.yaml")["module"] == __name__
+
+
+_EXP_SRC = '''
+from dataclasses import dataclass
+from runkit import RunContext, experiment, main
+
+@dataclass
+class Cfg:
+    seed: int = 1
+
+@experiment(name="sub")
+def run(cfg: Cfg, ctx: RunContext):
+    pass
+
+if __name__ == "__main__":
+    main(run)
+'''
+
+
+@pytest.mark.parametrize("how, module", [("-m", "pkg.exp"), ("script", None)])
+def test_meta_module_under_python_m_and_as_a_script(tmp_path, how, module):
+    """`python -m pkg.exp` records the real name, not `__main__`; a plain
+    script has no importable name."""
+    import subprocess
+    import sys
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "__init__.py").write_text("")
+    (tmp_path / "pkg" / "exp.py").write_text(_EXP_SRC)
+    target = ["-m", "pkg.exp"] if how == "-m" else [str(tmp_path / "pkg" / "exp.py")]
+    subprocess.run([sys.executable, *target, f"--root={tmp_path / 'runs'}"],
+                   cwd=tmp_path, check=True, capture_output=True)
+    assert _yaml(_only_run_dir(tmp_path / "runs"), "meta.yaml")["module"] == module
+
+
+def test_banner_shows_only_what_differs_from_the_defaults(tmp_path, capsys):
+    main(run, ["seed=5", "--tag=t1", f"--root={tmp_path}"])
+    err = capsys.readouterr().err
+    assert "seed: 5" in err and "lr:" not in err            # lr is at its default
+    assert "2 more at their defaults" in err and "t1" in err
+    main(run, [f"--root={tmp_path}"])
+    assert "all 3 fields at their defaults" in capsys.readouterr().err
+
+
+def test_config_changes_flattens_nested_fields():
+    from dataclasses import field
+    from runkit.utils import config_changes
+
+    @dataclass
+    class Optim:
+        lr: float = 1e-3
+        warmup: int = 0
+
+    @dataclass
+    class Nested:
+        steps: int                                  # no default: always shown
+        optim: Optim = field(default_factory=Optim)
+
+    changes, n = config_changes(Nested(steps=10, optim=Optim(lr=1e-4)))
+    assert changes == {"steps": 10, "optim.lr": 1e-4} and n == 3
+
+
+def test_closing_line_says_how_it_went(tmp_path, capsys):
+    main(run, [f"--root={tmp_path}"])
+    assert re.search(r"✓ mock_[0-9a-f]{8}\s+ok in \d", capsys.readouterr().err)
+    with pytest.raises(ValueError):
+        main(failing_run, [f"--root={tmp_path}"])
+    err = capsys.readouterr().err
+    assert "failed after" in err and "ValueError: bad shape" in err
+    assert "traceback.txt" in "".join(err.split())         # the path may wrap
+    with pytest.raises(KeyboardInterrupt):
+        main(interrupted_run, [f"--root={tmp_path}"])
+    assert "interrupted after" in capsys.readouterr().err
+
+
+def test_a_tag_with_underscores_stays_whole(tmp_path):
+    """The tag is the remainder after the fixed-width part, underscores and all."""
+    r = run(Cfg(), tag="lr_sweep_a", root=tmp_path)
+    assert r.context.dir.name[29:] == "lr_sweep_a"
+    assert r.context.id == f"mock_{dir_hex(r.context.dir)}"

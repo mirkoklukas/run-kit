@@ -85,6 +85,47 @@ def serialize_cfg(cfg):
     return {"repr": repr(cfg)}
 
 
+def _flat(d, prefix=""):
+    """{"optim": {"lr": 1}} -> {"optim.lr": 1}; an empty dict stays a leaf."""
+    out = {}
+    for k, v in d.items():
+        if isinstance(v, dict) and v:
+            out.update(_flat(v, f"{prefix}{k}."))
+        else:
+            out[f"{prefix}{k}"] = v
+    return out
+
+
+def _defaults(cls):
+    """A dataclass's field defaults as a plain dict; fields without one are left out."""
+    out = {}
+    for f in dataclasses.fields(cls):
+        if f.default is not dataclasses.MISSING:
+            v = f.default
+        elif f.default_factory is not dataclasses.MISSING:
+            v = f.default_factory()
+        else:
+            continue
+        out[f.name] = (dataclasses.asdict(v)
+                       if dataclasses.is_dataclass(v) and not isinstance(v, type) else v)
+    return out
+
+
+def config_changes(cfg):
+    """(the fields of `cfg` that differ from its defaults, how many fields in all).
+
+    Flattened to dotted keys (`optim.lr`), as they would be set on the command
+    line. A field with no default always counts as changed -- somebody set it.
+    """
+    if not (dataclasses.is_dataclass(cfg) and not isinstance(cfg, type)):
+        flat = _flat(serialize_cfg(cfg))
+        return flat, len(flat)
+    values = _flat(dataclasses.asdict(cfg))
+    defaults = _flat(_defaults(type(cfg)))
+    changed = {k: v for k, v in values.items() if k not in defaults or defaults[k] != v}
+    return changed, len(values)
+
+
 def dump_retval(run_dir, value):
     """Best-effort dump of a run's return value into `run_dir`.
 

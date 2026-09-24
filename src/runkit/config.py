@@ -7,6 +7,7 @@ Two namespaces, strictly disjoint:
 Pure functions; no IO, no globals. Tested in isolation.
 """
 import dataclasses
+import inspect
 import types
 import typing
 
@@ -100,6 +101,18 @@ def _coerce(s):
     except ValueError:
         pass
     return s
+
+
+def annotated_cfg(fn):
+    """The annotation on `fn`'s `cfg` parameter, or None if it has none.
+
+    Follows `functools.wraps` to the body, and `eval_str=True` so a string
+    annotation (`from __future__ import annotations`) resolves to the class.
+    """
+    params = inspect.signature(fn, eval_str=True).parameters
+    if "cfg" not in params or params["cfg"].annotation is inspect.Parameter.empty:
+        return None
+    return params["cfg"].annotation
 
 
 def build_cfg(cls, overrides):
