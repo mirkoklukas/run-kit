@@ -401,3 +401,23 @@ def test_nested_field_without_a_default_is_built_from_the_class():
         pad: Pad
 
     assert build_cfg(NoDefault, {"pad": {"friction": 2.0}}).pad == Pad(cells=4, friction=2.0)
+
+
+
+@experiment(name="peek")
+def peek_run(cfg: Cfg, ctx: RunContext):
+    return yaml.safe_load((ctx.dir / "status.yaml").read_text())     # as seen mid-run
+
+
+def test_status_names_the_process_that_owns_the_run(tmp_path):
+    import os
+    import socket
+    r = main(peek_run, [f"--root={tmp_path}"])
+    during = r.retval
+    assert during["status"] == "running"
+    assert during["pid"] == os.getpid() and during["host"] == socket.gethostname()
+    assert during["updated"] >= during["started"]
+    after = _yaml(r.context.dir, "status.yaml")
+    assert after["status"] == "ok" and after["pid"] == os.getpid()
+    assert after["updated"] >= during["updated"]
+    assert not list(r.context.dir.glob(".*.tmp"))                    # atomic writes leave nothing

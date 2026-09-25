@@ -18,6 +18,7 @@ import datetime
 import functools
 import os
 import pathlib
+import socket
 import sys
 import time
 import traceback
@@ -62,7 +63,16 @@ class Run:
 
 
 def _dump_yaml(path, data):
-    path.write_text(yaml.safe_dump(data, sort_keys=False))
+    """Write yaml atomically: to a temp file beside `path`, then rename over it.
+
+    Other processes read these files while a run writes them (`status.yaml`
+    most of all); a rename means a reader sees the old file or the new one,
+    never half of one.
+    """
+    path = pathlib.Path(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(yaml.safe_dump(data, sort_keys=False))
+    os.replace(tmp, path)
 
 
 def _stamp(when=None):
@@ -74,11 +84,16 @@ def _write_status(run_dir, *, status, started, ended=None, duration_s=None, erro
     """Write `{run_dir}/status.yaml`. Best-effort, and for a sharper reason than
     `dump_retval`: the final write happens inside a `finally` with the
     experiment's exception in flight, so a failure here must never replace it.
+
+    `updated` is when the file was last written. `host` and `pid` name the
+    process that owns the run -- a pid means something only on its host -- so a
+    run left at `running` can be checked for a process behind it.
     """
     try:
         _dump_yaml(pathlib.Path(run_dir) / "status.yaml", {
-            "status": status, "started": started, "ended": ended,
-            "duration_s": duration_s, "error": error,
+            "status": status, "started": started, "updated": _stamp(),
+            "host": socket.gethostname(), "pid": os.getpid(),
+            "ended": ended, "duration_s": duration_s, "error": error,
         })
     except Exception as e:                                   # noqa: BLE001
         ui.warn(f"could not write status.yaml: {e}")

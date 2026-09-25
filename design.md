@@ -390,6 +390,9 @@ has no such name.
 # status.yaml -- the lifecycle; the one file that changes
 status: failed
 started: '2026-06-26T15:40:12'
+updated: '2026-06-26T15:40:19'    # when this file was last written
+host: node-17                     # the process that owns the run:
+pid: 48213                        #   a pid means something only on its host
 ended: '2026-06-26T15:40:19'
 duration_s: 6.83
 error: 'ValueError: bad shape'
@@ -402,8 +405,12 @@ sit in.
 verdict when it ends, which makes three states honest rather than two — a run
 still sitting at `running` with no process behind it was killed hard (`kill -9`,
 OOM, the node went away), and nothing that runs at the end of a run can report
-that about itself. The `error` line stays a one-liner so a root full of runs is
-scannable:
+that about itself. `host` and `pid` are what make that checkable: on the same
+host, a `running` run whose pid is gone was killed (they are also what stopping a
+detached run will need). Every runkit yaml is written atomically — to a temp
+file, then renamed — so a process reading `status.yaml` mid-run sees the old
+file or the new one, never half of one. The `error` line stays a one-liner so a
+root full of runs is scannable:
 
 ```bash
 grep -l "status: failed" runs/*/*/status.yaml
