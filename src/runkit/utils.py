@@ -126,6 +126,27 @@ def config_changes(cfg):
     return changed, len(values)
 
 
+def point_latest(target):
+    """Point `latest`, beside `target`, at it: `{folder}/latest -> {target name}`.
+
+    A shortcut for people (`cd runs/baseline/latest`), not something runkit reads.
+    So it is best-effort -- a failure (no symlink rights, a real dir in the way)
+    warns and moves on. The target is relative, so the link survives moving the
+    folder, and it is swapped in with `os.replace`, so concurrent updates never
+    leave it half-written.
+    """
+    target = pathlib.Path(target)
+    link = target.parent / "latest"
+    tmp = target.parent / f".latest.{target.name}"
+    try:
+        tmp.symlink_to(target.name, target_is_directory=True)
+        os.replace(tmp, link)
+    except Exception as e:                                   # noqa: BLE001
+        tmp.unlink(missing_ok=True)
+        from . import ui
+        ui.warn(f"could not point {link} at {target.name}: {e}")
+
+
 def dump_retval(run_dir, value):
     """Best-effort dump of a run's return value into `run_dir`.
 

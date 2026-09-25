@@ -348,8 +348,8 @@ runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a/
 ├── status.yaml        running | ok | failed | interrupted, and how long
 ├── traceback.txt      only if the run raised
 ├── retval.json        the return value, if there was one (.npy for an array)
+├── checkpoints/       only if the run used ctx.checkpoint (see "Checkpoints")
 └── out/               ctx.out -- everything the body writes
-    └── checkpoints/
 ```
 
 **runkit owns the top level; the experiment owns `out/`.** Of runkit's files,
@@ -423,6 +423,84 @@ If the body raises, the exception propagates untouched — a failed experiment
 still exits non-zero with its own traceback. runkit records the outcome; it does
 not handle it. A `KeyboardInterrupt` is recorded as `interrupted` rather than
 `failed`, because you stopping it is not the same fact as it breaking.
+
+### Checkpoints
+
+A long run saves its state along the way, so a crash or a stop does not lose
+everything, and a run can be evaluated or resumed before it ends:
+
+```python
+@exp.run
+def run(cfg: Config, ctx: RunContext):
+    for it in ...:
+        with ctx.checkpoint() as ckpt:             # checkpoints/000003/
+            model.save(ckpt.dir / "model.zip")
+        if ret > best:
+            with ctx.checkpoint("best") as ckpt:   # checkpoints/best/
+                model.save(ckpt.dir / "model.zip")
+                ckpt.info["ep_return"] = ret       # saved with it
+```
+
+```python
+@dataclass
+class Checkpoint:
+    name: str        # the folder name; runkit's counter ("000003") when none is given
+    dir: Path        # {run dir}/checkpoints/<name>/
+    index: int       # runkit's counter: the order of checkpoints, whatever their names
+    info: dict       # yours; saved to checkpoint.yaml when the block exits
+```
+
+`ctx.checkpoint(name=None)` is the only way to make one. The name is free-form —
+the counter by default, or what suits the experiment (`f"{step}"`, `"best"`) —
+and there is no step argument: not every experiment has a step, and a step is
+one possible name.
+
+```
+runs/test_policy/2026-09-25_10-02-11_a3f9c1e7/
+├── ...
+└── checkpoints/
+    ├── 000001/
+    ├── 000002/
+    ├── best/
+    │   ├── model.zip          the body's: written into ckpt.dir
+    │   └── checkpoint.yaml    runkit's: written when the block exits
+    └── latest -> best         runkit's: the highest index
+```
+
+```yaml
+# checkpoints/best/checkpoint.yaml
+index: 3                          # runkit's counter: the order; latest = highest
+name: best
+time: '2026-09-25T13:47:40'       # when it finished writing
+elapsed_s: 13529.4                # since the run started
+run: test_policy_a3f9c1e7         # which run it came from, if the folder travels
+info: {ep_return: 20.7}           # ckpt.info (numpy values made plain)
+```
+
+Checkpoints sit at the top level, not under `out/`: runkit owns the structure —
+names, `checkpoint.yaml`, `latest` — and the body owns the files inside each
+`ckpt.dir`, the way it owns `ctx.out`. So `ctx.checkpoint` stays optional: an
+experiment that would rather manage its own checkpoints writes them under `out/`,
+and runkit never touches them.
+
+- **Complete means recorded.** The block writes into a hidden staging folder
+  (`checkpoints/.best.staging-3/` — that is `ckpt.dir` during the block); when
+  it exits cleanly, `checkpoint.yaml` is written and the folder is swapped into
+  place. If the block raises, nothing is recorded, nothing is replaced, and the
+  exception propagates. A killed save leaves at most a dot-folder, and a folder
+  without `checkpoint.yaml` is not a checkpoint.
+- **A repeated name replaces** the earlier checkpoint and takes a new `index` —
+  what `best` wants. The old one is removed only once the new one is in place.
+- **Order is `index`, never the name.** Names sort badly as text (`500000` after
+  `3000000`) or not at all (`best`), so "latest" is the highest index.
+- **Only the live run can checkpoint.** `ctx.live` is true in the context the
+  run wrapper hands the body, while the body runs; a context rebuilt from disk
+  (`load_run`, `eval`, `viz`) or a finished run's raises on `ctx.checkpoint`.
+  `live` is about this process, not the run: it is not written to
+  `run_context.yaml` and not part of comparing contexts.
+- **Reading back** works on any context: `ctx.checkpoints()`, or
+  `load_checkpoints(run_dir)`, gives the complete ones as `Checkpoint`s, oldest
+  first — for an `eval` to pick one, or a run to resume from.
 
 ### What you get back
 

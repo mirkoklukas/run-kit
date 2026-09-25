@@ -3,10 +3,11 @@
 - [x] **run dir organization** — grouping (`{root}/{name}/...`), the `latest`
   link, and the root per experiment (`experiment.toml`, `runkit root`) are done.
   Left: captured stdout as a runkit-owned file in the run dir.
-- [ ] **checkpoint callback and organization** — versioned checkpoints inside the run
-  dir (e.g. `checkpoints/<step>/`, `latest`), and a callback that writes them.
-  Designed: `with ctx.checkpoint(name=None) as ckpt:` -> `{run dir}/checkpoints/<name>/`
-  plus `checkpoint.yaml`; see proposals.md, "Checkpoints".
+- [x] **checkpoint callback and organization** — built: `with ctx.checkpoint(name=None)
+  as ckpt:` -> `{run dir}/checkpoints/<name>/` plus `checkpoint.yaml` and a `latest`
+  link; `ctx.checkpoints()` / `load_checkpoints` read them back; `ctx.live`. Open:
+  retention, a record in `status.yaml`, eval of a not-`ok` run from its latest
+  checkpoint (proposals.md, "Checkpoints: open").
 - [x] **eval and visualization** — built as `@exp.eval` / `@exp.viz`. Left: eval's
   own parameters, and whether a loaded `Run` carries `status` (proposals.md,
   "Open between the proposals").

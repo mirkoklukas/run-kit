@@ -28,7 +28,13 @@ import yaml
 
 from . import ui
 from .settings import resolve_root
-from .utils import config_changes, dump_retval, serialize_cfg
+from .utils import config_changes, dump_retval, point_latest, serialize_cfg
+
+
+def _private():
+    """A RunContext field about *this process*, not the run: never written to
+    run_context.yaml, and not part of comparing contexts."""
+    return dataclasses.field(default=None, repr=False, compare=False)
 
 
 @dataclasses.dataclass
@@ -36,11 +42,41 @@ class RunContext:
     dir: pathlib.Path        # the run dir; its top level is runkit's records
     id: str                  # stable unique run id, e.g. "baseline_a3f9c1e7" (for search)
     name: str | None = None  # the experiment's identity, as given to @experiment
+    _started: float | None = _private()     # monotonic start time, set by the run wrapper
+    _checkpoints: int = dataclasses.field(default=0, repr=False, compare=False)
 
     @property
     def out(self) -> pathlib.Path:
         """`{dir}/out` -- everything the experiment writes goes here."""
         return self.dir / "out"
+
+    @property
+    def live(self) -> bool:
+        """True in the context the run wrapper hands the body -- the process that
+        owns the run right now; False in one rebuilt from disk (`load_run`, and
+        so in eval and viz). Only a live context may write into the run."""
+        return self._started is not None
+
+    def checkpoint(self, name=None):
+        """`with ctx.checkpoint(name=None) as ckpt:` -- save into `ckpt.dir`.
+
+        `{dir}/checkpoints/<name>/`, named by runkit's counter (`000003`) unless
+        `name` is given; complete, recorded and made `latest` only when the block
+        exits cleanly. A repeated name replaces the earlier checkpoint. See
+        `runkit.checkpoints`. Live runs only.
+        """
+        from .checkpoints import _Saving
+        if not self.live:
+            raise RuntimeError(
+                "ctx.checkpoint: only the live run can checkpoint -- this context "
+                "was opened from disk (eval, viz, load_run)")
+        return _Saving(self, name)
+
+    def checkpoints(self):
+        """The run's complete checkpoints, oldest first (by index). Works on any
+        context, live or opened from disk."""
+        from .checkpoints import load_checkpoints
+        return load_checkpoints(self.dir)
 
 
 @dataclasses.dataclass
@@ -120,25 +156,6 @@ def _resolve_dir(root, name, tag, hex8):
     return pathlib.Path(root).resolve() / name / "_".join(parts)
 
 
-def _point_latest(run_dir):
-    """Point `{root}/{name}/latest` at `run_dir` -- the latest *started* run.
-
-    A shortcut for people (`cd runs/baseline/latest`), not a record: nothing in
-    runkit reads it. So it is best-effort -- a failure (no symlink rights, a real
-    dir in the way) warns and moves on. The target is relative, so the link
-    survives moving the root, and it is swapped in with `os.replace`, so
-    concurrent starts never leave it half-written.
-    """
-    link = run_dir.parent / "latest"
-    tmp = run_dir.parent / f".latest.{run_dir.name}"
-    try:
-        tmp.symlink_to(run_dir.name, target_is_directory=True)
-        os.replace(tmp, link)
-    except Exception as e:                                   # noqa: BLE001
-        tmp.unlink(missing_ok=True)
-        ui.warn(f"could not point {link} at this run: {e}")
-
-
 def init_run(cfg, *, name, tag, root, script=None, module=None):
     """Create the run dir, freeze the run into it, return a RunContext.
 
@@ -163,7 +180,7 @@ def init_run(cfg, *, name, tag, root, script=None, module=None):
     _dump_yaml(run_dir / "meta.yaml",
                {"tag": tag, "script": str(script) if script else None,
                 "module": module})
-    _point_latest(run_dir)
+    point_latest(run_dir)                    # {root}/{name}/latest: the latest *started* run
     return ctx
 
 
@@ -299,6 +316,7 @@ def _run_wrapper(f, name):
                        module=module)
         _announce(name, cfg, ctx, tag)
         started, t0 = datetime.datetime.now(), time.monotonic()
+        ctx._started = t0                    # makes it live: the body may write into the run
         _write_status(ctx.dir, status="running", started=_stamp(started))
         status, error = "ok", None
         try:
@@ -314,6 +332,7 @@ def _run_wrapper(f, name):
             # every branch re-raises: runkit records the outcome, it does
             # not handle it. A failed run still exits non-zero.
             duration_s = round(time.monotonic() - t0, 3)
+            ctx._started = None              # the body is done: no longer live
             _write_status(ctx.dir, status=status, started=_stamp(started),
                           ended=_stamp(), duration_s=duration_s, error=error)
             if status != "ok":

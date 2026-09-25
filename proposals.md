@@ -6,92 +6,9 @@ parts move to `design.md` and the rest is deleted here.
 
 ---
 
-## Checkpoints
+## Checkpoints: open
 
-A long run saves its state along the way, so a crash or a stop does not lose
-everything, and so a run can be evaluated or resumed before it ends. Today every
-experiment does this its own way (control-kit's PPO overwrites `out/model.zip`
-in place). runkit gives it a place, a name, and a record of which checkpoints
-are complete.
-
-```python
-with ctx.checkpoint() as ckpt:                 # checkpoints/000003/
-    model.save(ckpt.dir / "model.zip")
-
-with ctx.checkpoint("best") as ckpt:           # checkpoints/best/
-    model.save(ckpt.dir / "model.zip")
-    ckpt.info["ep_return"] = ret               # saved with it
-```
-
-```python
-@dataclass
-class Checkpoint:
-    name: str        # the folder name; runkit's counter ("000003") when none is given
-    dir: Path        # {run dir}/checkpoints/<name>/
-    index: int       # runkit's counter: the order of checkpoints, whatever their names
-    info: dict       # yours; saved to checkpoint.yaml when the block exits
-```
-
-`ctx.checkpoint(name=None)` is the only way to make one — `index` and `dir` are
-runkit's to assign. The name is free-form: the counter by default, or whatever
-suits the experiment (`f"{step}"`, `"best"`, `"last"`). There is no step
-argument: not every experiment has a step, and a step is one possible name.
-
-### On disk
-
-Checkpoints sit at the top level of the run dir, next to runkit's other
-records, not under `out/`:
-
-```
-runs/test_policy/2026-09-25_10-02-11_a3f9c1e7/
-├── config.yaml, run_context.yaml, meta.yaml, status.yaml
-├── out/                       the body's, as always
-└── checkpoints/
-    ├── 000001/
-    ├── 3000000/
-    ├── best/
-    │   ├── model.zip          the body's: written into ckpt.dir
-    │   └── checkpoint.yaml    runkit's: written when the block exits
-    └── latest -> best         runkit's: the highest index, once complete
-```
-
-The split follows the ownership rule (runkit owns the top level, the body owns
-`out/`): runkit owns the folder structure — names, `checkpoint.yaml`, `latest` —
-and the body owns the files inside each `ckpt.dir`, the way it is handed
-`ctx.out`. It also keeps `ctx.checkpoint` optional: an experiment that would
-rather manage checkpoints itself writes them under `out/` as before, and runkit
-never touches them.
-
-```yaml
-# checkpoints/best/checkpoint.yaml
-index: 7                          # runkit's counter: the order; latest = highest
-name: best
-time: '2026-09-25T13:47:40'       # when it finished writing
-elapsed_s: 13529.4                # since the run started
-run: test_policy_a3f9c1e7         # which run it came from, if the folder travels
-info: {ep_return: 20.7}           # ckpt.info, if anything was put there
-```
-
-Rules:
-
-- **`checkpoint.yaml` is written last, and only on a clean exit from the
-  block.** Its existence is what makes a checkpoint complete: a folder without
-  it was interrupted mid-save (killed, or the block raised), and every tool
-  ignores it. If the block raises, nothing is recorded, `latest` does not move,
-  and the exception propagates.
-- **Order is `index`, never the name.** Names sort badly as text (`500000`
-  after `3000000`) or not at all (`best`), so "latest" is the highest `index`:
-  the `latest` link and anything that picks a checkpoint use it.
-- **A repeated name replaces the old checkpoint** and takes a new `index`. That
-  is what `best` and `last` want.
-- **Only the live run can checkpoint** (`ctx.live`, see "Live runs" below). A
-  `RunContext` rebuilt by `load_run` (in `eval` / `viz`) raises on
-  `ctx.checkpoint`: it must not write into a run it only opened.
-- **Reading back** returns the same type: a run's checkpoints as `Checkpoint`
-  objects (read from their `checkpoint.yaml`), newest last — for `eval` to pick
-  one, or a run to resume from.
-
-### Open
+Checkpoints are built (see design.md, "Checkpoints"). Still open:
 
 - **A record in `status.yaml`** of the latest checkpoint, so `runkit ls` can
   show it without scanning — or is the folder enough?
@@ -100,8 +17,6 @@ Rules:
 - **`eval` of a run that is not `ok`**: today `eval` skips runs that failed or
   are still going. With complete checkpoints, it could evaluate their latest
   one instead.
-- **Progress reporting** (how far along a live run is) — separate from
-  checkpoints; see "Live runs" below.
 
 ---
 
@@ -113,14 +28,14 @@ built, see design.md).
 
 ### `ctx.live`
 
-`True` in the context the run wrapper hands the body — the process that owns
+*(Built with checkpoints — see design.md.)* `True` in the context the run wrapper hands the body — the process that owns
 the run right now. `False` in a context rebuilt from disk (`load_run`, and so in
 `eval` and `viz`). It is the one rule behind what a context may write:
 
 | call | live (the run) | not live (eval, viz, `load_run`) |
 | ---- | -------------- | -------------------------------- |
 | `ctx.progress(...)` | yes | error |
-| `ctx.checkpoint(...)` | yes | error |
+| `ctx.checkpoint(...)` | yes | error *(built)* |
 | `ctx.record(**values)` | stream `run` | error: name a stream |
 | `ctx.record("eval", **values)` | yes | yes |
 | `ctx.record("run", **values)` | yes | error: `run` is the run's |
