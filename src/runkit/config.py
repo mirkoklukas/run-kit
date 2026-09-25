@@ -115,15 +115,25 @@ def annotated_cfg(fn):
     return params["cfg"].annotation
 
 
-def build_cfg(cls, overrides):
+def build_cfg(cls, overrides, base=None):
     """Instantiate dataclass `cls` with `overrides` applied to defaults.
 
-    Supports nested dataclasses: a dict value is recursively passed to the
-    field's annotated dataclass type.
+    Supports nested dataclasses: a dict value overrides fields *of the nested
+    config the field would otherwise hold* -- its own default (`default_factory()`
+    or `default`), or, below the top, the parent's value -- so every field the
+    overrides do not mention keeps that value, not the nested class's defaults.
+    A subclass default stays that subclass. Only a field with no default is
+    built fresh from its annotated class.
+
+    `base`: an instance to override instead of `cls`'s defaults (used for the
+    nesting; the result is `dataclasses.replace(base, ...)`).
     """
+    if base is not None:
+        cls = type(base)
     if not dataclasses.is_dataclass(cls):
         raise TypeError(f"{cls!r} is not a dataclass")
     field_types = typing.get_type_hints(cls)
+    fields = {f.name: f for f in dataclasses.fields(cls)}
     kwargs = {}
     for k, v in overrides.items():
         if k not in field_types:
@@ -132,10 +142,29 @@ def build_cfg(cls, overrides):
                 f"known: {sorted(field_types)}")
         t = field_types[k]
         if isinstance(v, dict) and dataclasses.is_dataclass(t):
-            kwargs[k] = build_cfg(t, v)
+            current = getattr(base, k) if base is not None else _field_default(fields[k])
+            if _is_instance(current):
+                kwargs[k] = build_cfg(type(current), v, base=current)
+            else:
+                kwargs[k] = build_cfg(t, v)
         else:
             kwargs[k] = _cast(t, v)
+    if base is not None:
+        return dataclasses.replace(base, **kwargs)
     return cls(**kwargs)
+
+
+def _is_instance(x):
+    return dataclasses.is_dataclass(x) and not isinstance(x, type)
+
+
+def _field_default(f):
+    """The value a dataclass field gets when it is not passed, or None."""
+    if f.default is not dataclasses.MISSING:
+        return f.default
+    if f.default_factory is not dataclasses.MISSING:
+        return f.default_factory()
+    return None
 
 
 def _unwrap_optional(t):

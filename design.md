@@ -151,6 +151,21 @@ actually set are passed to the constructor, so every unmentioned field falls
 through to its dataclass default. A field with *no* default that nobody sets
 fails loudly, with python's own `missing 1 required positional argument`.
 
+The same holds inside a nested config. Overriding `model.lr` changes that one
+field of the config `model` would otherwise hold — the field's own default —
+and leaves the rest of it alone:
+
+```python
+@dataclass
+class PolicyCfg:
+    model: ModelCfg = field(default_factory=lambda: ModelCfg(pad_cells=1))
+```
+
+`model.lr=1e-4` gives `ModelCfg(pad_cells=1, lr=1e-4)`, not `ModelCfg`'s class
+defaults with `lr` set: the nested override is applied to the field's default
+(`default_factory()` or `default`), and a subclass default stays that subclass.
+Only a nested field with no default is built fresh from its class.
+
 The config yaml is named either as a bare positional or as `--config=PATH`
 (giving both is an error unless they agree). Its path may carry a scheme:
 

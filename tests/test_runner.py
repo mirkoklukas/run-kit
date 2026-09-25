@@ -3,6 +3,7 @@
 Each test drives `autocli.main(run, argv)` with an explicit argv and a tmp
 `--root`, then asserts on the produced run dir. Run with: `uv run --extra dev pytest`.
 """
+import dataclasses
 import json
 import pathlib
 import re
@@ -14,7 +15,7 @@ import yaml
 
 from runkit import Run, RunContext, experiment, init_run
 from runkit.autocli import main
-from runkit.config import build_cfg
+from runkit.config import build_cfg, deep_merge, parse_overrides
 from runkit.runs import dir_hex
 from runkit.utils import resolve_config_path
 
@@ -345,3 +346,58 @@ def test_a_tag_with_underscores_stays_whole(tmp_path):
     r = run(Cfg(), tag="lr_sweep_a", root=tmp_path)
     assert r.context.dir.name[29:] == "lr_sweep_a"
     assert r.context.id == f"mock_{dir_hex(r.context.dir)}"
+
+
+# -- nested configs ------------------------------------------------------------
+
+@dataclass
+class Pad:
+    cells: int = 4
+    friction: float = 1.0
+
+
+@dataclass
+class Leg:
+    pad: Pad = dataclasses.field(default_factory=lambda: Pad(cells=1))   # custom default
+    stiffness: float = 10.0
+
+
+@dataclass
+class Robot:
+    leg: Leg = dataclasses.field(default_factory=lambda: Leg(stiffness=20.0))
+    name: str = "r"
+
+
+def test_nested_override_keeps_the_fields_own_default():
+    """`leg.pad.friction=0.5` changes friction only: `cells` stays at the field's
+    default (1, from Leg's default_factory), not Pad's class default (4)."""
+    cfg = build_cfg(Robot, parse_overrides(["leg.pad.friction=0.5"]))
+    assert cfg.leg.pad == Pad(cells=1, friction=0.5)
+    assert cfg.leg.stiffness == 20.0            # Robot's default for leg, not Leg's (10)
+
+
+def test_nested_override_keeps_a_subclass_default():
+    @dataclass
+    class TrainPad(Pad):
+        cells: int = 1
+
+    @dataclass
+    class Cfg2:
+        pad: Pad = dataclasses.field(default_factory=TrainPad)
+
+    cfg = build_cfg(Cfg2, parse_overrides(["pad.friction=0.5"]))
+    assert type(cfg.pad) is TrainPad and cfg.pad == TrainPad(cells=1, friction=0.5)
+
+
+def test_nested_yaml_and_cli_layers_merge_onto_the_field_default(tmp_path):
+    cfg = build_cfg(Robot, deep_merge({"leg": {"pad": {"cells": 3}}},
+                                      parse_overrides(["leg.stiffness=5"])))
+    assert cfg.leg == Leg(pad=Pad(cells=3, friction=1.0), stiffness=5.0)
+
+
+def test_nested_field_without_a_default_is_built_from_the_class():
+    @dataclass
+    class NoDefault:
+        pad: Pad
+
+    assert build_cfg(NoDefault, {"pad": {"friction": 2.0}}).pad == Pad(cells=4, friction=2.0)
