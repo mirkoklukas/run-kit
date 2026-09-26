@@ -349,6 +349,7 @@ runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a/
 ├── traceback.txt      only if the run raised
 ├── retval.json        the return value, if there was one (.npy for an array)
 ├── checkpoints/       only if the run used ctx.checkpoint (see "Checkpoints")
+├── metrics/           only if something used ctx.record (see "Progress and metrics")
 └── out/               ctx.out -- everything the body writes
 ```
 
@@ -393,6 +394,9 @@ started: '2026-06-26T15:40:12'
 updated: '2026-06-26T15:40:19'    # when this file was last written
 host: node-17                     # the process that owns the run:
 pid: 48213                        #   a pid means something only on its host
+progress: 3200000                 # the body's last ctx.progress (null if never called)
+total: 10000000
+checkpoint: checkpoints/best      # the latest complete checkpoint, relative to the run dir
 ended: '2026-06-26T15:40:19'
 duration_s: 6.83
 error: 'ValueError: bad shape'
@@ -498,9 +502,80 @@ and runkit never touches them.
   (`load_run`, `eval`, `viz`) or a finished run's raises on `ctx.checkpoint`.
   `live` is about this process, not the run: it is not written to
   `run_context.yaml` and not part of comparing contexts.
+- **`status.yaml` names the latest one** as a path relative to the run dir —
+  `checkpoint: checkpoints/best` — written as soon as a checkpoint completes
+  (not throttled like progress) and kept in the final write, so a failed run
+  says what it can be resumed from: `run_dir / status["checkpoint"]`. Only the
+  path: index, time and info stay in that checkpoint's own `checkpoint.yaml`.
 - **Reading back** works on any context: `ctx.checkpoints()`, or
   `load_checkpoints(run_dir)`, gives the complete ones as `Checkpoint`s, oldest
   first — for an `eval` to pick one, or a run to resume from.
+
+### Progress and metrics
+
+Two more things a live run can report while it goes — how far along it is, and
+the numbers it produces:
+
+```python
+@exp.run
+def run(cfg: Config, ctx: RunContext):
+    ctx.progress(total=cfg.steps)                   # status.yaml: progress 0 of 10M
+    for it in ...:
+        ctx.record(it=it, steps=n, ep_return=ret)   # metrics/run.jsonl
+        ctx.progress(n)                             # the total is remembered
+```
+
+**`ctx.progress(n=None, /, *, total=None)`** writes `progress` and `total` into
+`status.yaml`, flat, next to `status` and `updated`. `n` is any count — env
+steps, iterations, candidates tried — since not every experiment has a "step";
+a bare percentage is `ctx.progress(0.32, total=1)`. `total` is sticky: set it
+once, and later calls pass only `n`; it stays null for an open-ended run. It is
+keyword-only, so `ctx.progress(5, 10)` cannot be misread. Writes happen at most
+every two seconds (or when `total` changes), so calling it every iteration is
+fine, and the run's final `status.yaml` keeps the last values — a failed run
+shows how far it got.
+
+**`ctx.record(stream=None, /, **values)`** appends one line to
+`metrics/<stream>.jsonl`, with `time` and `elapsed_s` added by runkit:
+
+```
+# metrics/run.jsonl
+{"time": "2026-09-26T13:47:40.112", "elapsed_s": 13529.4, "it": 781, "steps": 3200000, "ep_return": 20.7}
+```
+
+- **Named `record`**, not `log`: "log" is the run's captured stdout (planned)
+  and python's `logging`, both text.
+- **A folder of streams**, runkit-owned, next to `checkpoints/` and `out/`. The
+  run records to `run`; anything else names its stream — `eval` records with
+  `ctx.record("eval", ...)` to `metrics/eval.jsonl`, so its numbers never mix
+  into the training series. `elapsed_s` there counts from when eval opened the
+  run.
+- **The stream is positional-only** (`/`), so a metric that happens to be called
+  `stream` is just a value. `time` and `elapsed_s` are runkit's and refused as
+  keys.
+- **JSON Lines**: calls may carry different keys (CSV needs fixed columns), an
+  append is crash-safe (a killed run loses at most its last, torn line, which
+  the reader skips), and it reads back with `load_metrics(run_dir, "run")` or
+  `pandas.read_json(path, lines=True)`. numpy values are written as plain ones.
+- **No step argument**: the experiment's x axis (`it`, `steps`, `epoch`) is just
+  another key.
+- **Separate from progress**: progress is one current position, overwritten;
+  metrics are the whole history, appended. `record` does not move progress.
+
+What a context may write follows from `ctx.live` — true only in the body of a
+running run:
+
+| call | live (the run) | not live (eval, viz, `load_run`, a finished run) |
+| ---- | -------------- | ------------------------------------------------ |
+| `ctx.progress(...)` | yes | error |
+| `ctx.checkpoint(...)` | yes | error |
+| `ctx.record(**values)` | stream `run` | error: name a stream |
+| `ctx.record("eval", **values)` | yes | yes |
+| `ctx.record("run", **values)` | yes | error: `run` is the run's own |
+
+Why standardize metrics at all: they are the one output a generic tool can read
+without knowing the experiment — comparing a sweep, or "final return per run"
+in a future `runkit ls` — where otherwise each experiment writes its own format.
 
 ### What you get back
 

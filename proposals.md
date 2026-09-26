@@ -10,8 +10,6 @@ parts move to `design.md` and the rest is deleted here.
 
 Checkpoints are built (see design.md, "Checkpoints"). Still open:
 
-- **A record in `status.yaml`** of the latest checkpoint, so `runkit ls` can
-  show it without scanning — or is the folder enough?
 - **Retention**: keep the last N, keep the best by an `info` key. Add when a
   folder of checkpoints gets too big.
 - **`eval` of a run that is not `ok`**: today `eval` skips runs that failed or
@@ -20,109 +18,15 @@ Checkpoints are built (see design.md, "Checkpoints"). Still open:
 
 ---
 
-## Live runs: progress and metrics
+## Progress and metrics: open
 
-What a run reports about itself while it goes, beyond `status.yaml`'s lifecycle
-(which runkit writes, and which already records `updated`, `host` and `pid` —
-built, see design.md).
-
-### `ctx.live`
-
-*(Built with checkpoints — see design.md.)* `True` in the context the run wrapper hands the body — the process that owns
-the run right now. `False` in a context rebuilt from disk (`load_run`, and so in
-`eval` and `viz`). It is the one rule behind what a context may write:
-
-| call | live (the run) | not live (eval, viz, `load_run`) |
-| ---- | -------------- | -------------------------------- |
-| `ctx.progress(...)` | yes | error |
-| `ctx.checkpoint(...)` | yes | error *(built)* |
-| `ctx.record(**values)` | stream `run` | error: name a stream |
-| `ctx.record("eval", **values)` | yes | yes |
-| `ctx.record("run", **values)` | yes | error: `run` is the run's |
-
-`live` describes this process, not the run: a read-only property backed by a
-private field that only the run wrapper sets. It is not written to
-`run_context.yaml` and does not take part in comparing contexts, so a context
-rebuilt by `load_run` still equals the one the run had.
-
-### Progress: `ctx.progress(n=None, *, total=None)`
-
-How far along the run is, called by the body whenever it likes:
-
-```python
-@exp.run
-def run(cfg, ctx):
-    ctx.progress(total=cfg.steps)     # at the start: 0 of 10M
-    for step in ...:
-        ctx.progress(step)            # the total is remembered
-```
-
-- **Written flat into `status.yaml`**, the one file that changes:
-  `progress: 3200000` and `total: 10000000` next to `status` and `updated`.
-  `null` when never set. No stored fraction — a reader derives it.
-- **`n` is any count** — env steps, iterations, candidates tried — not a
-  "step": not every experiment has one. A bare percentage is
-  `ctx.progress(0.32, total=1)`.
-- **`total` is sticky**: set once (at the start, or when it becomes known), kept
-  until set again; null for an open-ended run ("3.2M, still going").
-  Keyword-only, so `ctx.progress(5, 10)` cannot be misread.
-- **Throttled**: a write at most every few seconds, so calling it every
-  iteration is fine; the final `status.yaml` write keeps the last values, so a
-  failed run shows how far it got.
-- **Live only.**
-
-### Metrics: `ctx.record(stream=None, /, **values)`
-
-A time series of named values, the thing every tracking library has at its core
-(`tf.summary.scalar`, `wandb.log`, `mlflow.log_metric`), kept as plain files in
-the run dir:
-
-```python
-ctx.record(it=it, steps=n, ep_return=ret, vx=vx)     # during the run -> metrics/run.jsonl
-ctx.record("eval", ep_return=ret, fell=False)         # in eval         -> metrics/eval.jsonl
-```
-
-```
-{run dir}/
-├── checkpoints/
-├── metrics/
-│   ├── run.jsonl
-│   └── eval.jsonl
-└── out/
-```
-
-```
-# metrics/run.jsonl -- one line per call; runkit adds time and elapsed_s
-{"time": "2026-09-25T13:47:40", "elapsed_s": 13529.4, "it": 781, "steps": 3200000, "ep_return": 20.7}
-```
-
-- **Named `record`**, not `log`: "log" is the run's captured stdout (planned)
-  and python's `logging`, both text.
-- **A folder of streams**, next to `checkpoints/` and `out/`, runkit-owned. The
-  deciding case is eval: its numbers must not mix into the training series.
-  Each stream keeps its own keys.
-- **The stream is the first argument, positional-only** (`/`), so a metric
-  named `stream` is just a value. Without it, the stream is `run` — which only
-  the live run may write; everything else names its stream.
-- **JSON Lines**: calls may carry different keys (CSV needs fixed columns), an
-  append is crash-safe (a killed run loses at most a line), and it reads back
-  with `pandas.read_json(path, lines=True)`.
-- **No step argument**: the experiment's x axis (`steps`, `it`, `epoch`) is
-  just another key. runkit adds only `time` and `elapsed_s`, which always exist.
-- **Separate from progress**: progress is one current position, overwritten;
-  metrics are the whole history, appended. `record` does not update progress.
-
-Why standardize it at all: this is the one output a generic tool can read
-without knowing the experiment — `@exp.compare` across a sweep, or "final return
-per run" in a `runkit ls` — where today each experiment writes its own format
-(control-kit's `progress.csv`). A viewer, or export to TensorBoard / W&B, would
-be small adapters over these files, later if at all.
-
-### Open
+`ctx.progress`, `ctx.record` and `ctx.live` are built (see design.md, "Progress
+and metrics"). Still open:
 
 - `record` from `eval` appends to the same stream every time eval runs; each
   line has its `time`, but a re-run of eval is not otherwise marked.
-- A reader: `load_run(...).metrics("run")`, or a free function.
+- Showing progress: `runkit ls` (not built), or the closing line of a failed
+  run ("failed at 3.2M / 10M").
 
 ---
 

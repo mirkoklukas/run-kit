@@ -31,6 +31,9 @@ from .settings import resolve_root
 from .utils import config_changes, dump_retval, point_latest, serialize_cfg
 
 
+PROGRESS_EVERY_S = 2.0       # ctx.progress writes status.yaml at most this often
+
+
 def _private():
     """A RunContext field about *this process*, not the run: never written to
     run_context.yaml, and not part of comparing contexts."""
@@ -38,12 +41,25 @@ def _private():
 
 
 @dataclasses.dataclass
+class _Live:
+    """What only the process running the body knows. The run wrapper creates it
+    before the body and drops it after, which is what `ctx.live` means."""
+    t0: float                          # monotonic start of the body
+    started: str                       # the `started` stamp, to rewrite status.yaml
+    checkpoints: int = 0               # checkpoints made so far: the counter
+    progress: object = None            # ctx.progress: the count ...
+    total: object = None               # ... and the total, sticky
+    checkpoint: str | None = None      # the latest complete checkpoint, relative to the run dir
+    written: float | None = None       # monotonic time progress was last written
+
+
+@dataclasses.dataclass
 class RunContext:
     dir: pathlib.Path        # the run dir; its top level is runkit's records
     id: str                  # stable unique run id, e.g. "baseline_a3f9c1e7" (for search)
     name: str | None = None  # the experiment's identity, as given to @experiment
-    _started: float | None = _private()     # monotonic start time, set by the run wrapper
-    _checkpoints: int = dataclasses.field(default=0, repr=False, compare=False)
+    _live: _Live | None = _private()        # set by the run wrapper while the body runs
+    _opened: float | None = _private()      # monotonic time a context was opened from disk
 
     @property
     def out(self) -> pathlib.Path:
@@ -55,7 +71,63 @@ class RunContext:
         """True in the context the run wrapper hands the body -- the process that
         owns the run right now; False in one rebuilt from disk (`load_run`, and
         so in eval and viz). Only a live context may write into the run."""
-        return self._started is not None
+        return self._live is not None
+
+    def _require_live(self, what):
+        if self._live is None:
+            raise RuntimeError(
+                f"{what}: only the live run can do this -- this context was opened "
+                f"from disk (eval, viz, load_run) or its run has finished")
+        return self._live
+
+    def progress(self, n=None, /, *, total=None):
+        """How far along the run is: `n` of `total`, written into `status.yaml`
+        as `progress` / `total`.
+
+        `n` is any count (steps, iterations, candidates tried). `total` is
+        sticky: set it once -- `ctx.progress(total=cfg.steps)` at the start --
+        and later calls pass only `n`; it stays null for an open-ended run. A
+        write happens at most every PROGRESS_EVERY_S seconds (or when `total`
+        changes), so calling it every iteration is fine; the run's final
+        status.yaml keeps the last values. Live runs only.
+        """
+        live = self._require_live("ctx.progress")
+        if n is not None:
+            live.progress = _count(n, "n")
+        if total is not None:
+            live.total = _count(total, "total")
+        now = time.monotonic()
+        if (total is not None or live.written is None
+                or now - live.written >= PROGRESS_EVERY_S):
+            live.written = now
+            self._write_running()
+
+    def _write_running(self):
+        """Rewrite status.yaml mid-run with what the body has reported so far."""
+        live = self._live
+        _write_status(self.dir, status="running", started=live.started,
+                      progress=live.progress, total=live.total, checkpoint=live.checkpoint)
+
+    def record(self, stream=None, /, **values):
+        """Append a row of named values to `{dir}/metrics/<stream>.jsonl`.
+
+        `ctx.record(it=it, ep_return=r)` records to the run's own stream, `run`;
+        `ctx.record("eval", ep_return=r)` to a stream of that name. runkit adds
+        `time` and `elapsed_s`. Only the live run writes `run` (and may omit the
+        stream); a context opened from disk -- in eval, say -- must name its
+        stream. See `runkit.metrics`.
+        """
+        from .metrics import append
+        if stream is None:
+            if not self.live:
+                raise RuntimeError(
+                    "ctx.record: name a stream -- only the live run records to the "
+                    "default stream 'run' (e.g. ctx.record('eval', ...))")
+            stream = "run"
+        elif stream == "run" and not self.live:
+            raise RuntimeError("ctx.record: the stream 'run' is the run's own; "
+                               "only the live run writes it")
+        append(self, stream, values)
 
     def checkpoint(self, name=None):
         """`with ctx.checkpoint(name=None) as ckpt:` -- save into `ckpt.dir`.
@@ -66,10 +138,7 @@ class RunContext:
         `runkit.checkpoints`. Live runs only.
         """
         from .checkpoints import _Saving
-        if not self.live:
-            raise RuntimeError(
-                "ctx.checkpoint: only the live run can checkpoint -- this context "
-                "was opened from disk (eval, viz, load_run)")
+        self._require_live("ctx.checkpoint")
         return _Saving(self, name)
 
     def checkpoints(self):
@@ -116,19 +185,31 @@ def _stamp(when=None):
     return (when or datetime.datetime.now()).isoformat(timespec="seconds")
 
 
-def _write_status(run_dir, *, status, started, ended=None, duration_s=None, error=None):
+def _count(v, what):
+    """A progress count as a plain int or float (numpy scalars included)."""
+    v = v.item() if hasattr(v, "item") and not isinstance(v, (int, float)) else v
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise TypeError(f"ctx.progress: {what} must be a number, got {v!r}")
+    return v
+
+
+def _write_status(run_dir, *, status, started, ended=None, duration_s=None, error=None,
+                  progress=None, total=None, checkpoint=None):
     """Write `{run_dir}/status.yaml`. Best-effort, and for a sharper reason than
     `dump_retval`: the final write happens inside a `finally` with the
     experiment's exception in flight, so a failure here must never replace it.
 
     `updated` is when the file was last written. `host` and `pid` name the
     process that owns the run -- a pid means something only on its host -- so a
-    run left at `running` can be checked for a process behind it.
+    run left at `running` can be checked for a process behind it. `progress` /
+    `total` are the body's last `ctx.progress`; `checkpoint` is the latest
+    complete checkpoint, as a path relative to the run dir.
     """
     try:
         _dump_yaml(pathlib.Path(run_dir) / "status.yaml", {
             "status": status, "started": started, "updated": _stamp(),
             "host": socket.gethostname(), "pid": os.getpid(),
+            "progress": progress, "total": total, "checkpoint": checkpoint,
             "ended": ended, "duration_s": duration_s, "error": error,
         })
     except Exception as e:                                   # noqa: BLE001
@@ -316,7 +397,7 @@ def _run_wrapper(f, name):
                        module=module)
         _announce(name, cfg, ctx, tag)
         started, t0 = datetime.datetime.now(), time.monotonic()
-        ctx._started = t0                    # makes it live: the body may write into the run
+        ctx._live = _Live(t0=t0, started=_stamp(started))   # live: the body may write into the run
         _write_status(ctx.dir, status="running", started=_stamp(started))
         status, error = "ok", None
         try:
@@ -332,8 +413,10 @@ def _run_wrapper(f, name):
             # every branch re-raises: runkit records the outcome, it does
             # not handle it. A failed run still exits non-zero.
             duration_s = round(time.monotonic() - t0, 3)
-            ctx._started = None              # the body is done: no longer live
+            live, ctx._live = ctx._live, None     # the body is done: no longer live
             _write_status(ctx.dir, status=status, started=_stamp(started),
+                          progress=live.progress, total=live.total,
+                          checkpoint=live.checkpoint,
                           ended=_stamp(), duration_s=duration_s, error=error)
             if status != "ok":
                 _report(ctx, status, duration_s, error)

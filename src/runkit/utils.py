@@ -126,6 +126,23 @@ def config_changes(cfg):
     return changed, len(values)
 
 
+def plain(v):
+    """What yaml / json can write: numpy scalars and arrays become python values,
+    anything else unknown its repr. Never raises -- a value it cannot represent
+    must not cost the checkpoint or the metrics row it is part of."""
+    if isinstance(v, dict):
+        return {str(k): plain(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [plain(x) for x in v]
+    if isinstance(v, np.generic):
+        return v.item()
+    if isinstance(v, np.ndarray):
+        return v.tolist()
+    if v is None or isinstance(v, (bool, int, float, str)):
+        return v
+    return repr(v)
+
+
 def point_latest(target):
     """Point `latest`, beside `target`, at it: `{folder}/latest -> {target name}`.
 

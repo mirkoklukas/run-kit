@@ -5,6 +5,7 @@ run dir of one experiment; `load_run` rebuilds the `Run` it holds.
 """
 import json
 import pathlib
+import time
 
 import numpy as np
 import yaml
@@ -114,7 +115,8 @@ def load_run(run_dir, cfg_cls):
     """
     run_dir = pathlib.Path(run_dir).resolve()
     rc = load_yaml(run_dir / "run_context.yaml")
-    ctx = RunContext(dir=run_dir, id=rc["id"], name=rc.get("name"))
+    ctx = RunContext(dir=run_dir, id=rc["id"], name=rc.get("name"),
+                     _opened=time.monotonic())      # for elapsed_s in what eval records
     cfg = build_cfg(cfg_cls, load_yaml(run_dir / "config.yaml"))
     retval = None
     if (run_dir / "retval.json").is_file():

@@ -23,10 +23,9 @@ import pathlib
 import shutil
 import time
 
-import numpy as np
 import yaml
 
-from .utils import point_latest
+from .utils import plain, point_latest
 
 FOLDER = "checkpoints"
 RECORD = "checkpoint.yaml"
@@ -49,7 +48,7 @@ class _Saving:
 
     def __enter__(self):
         ctx = self.ctx
-        index = ctx._checkpoints + 1
+        index = ctx._live.checkpoints + 1
         name = self.name if self.name is not None else f"{index:06d}"
         _check_name(name)
         folder = ctx.dir / FOLDER
@@ -72,15 +71,19 @@ class _Saving:
             "index": ckpt.index,
             "name": ckpt.name,
             "time": datetime.datetime.now().isoformat(timespec="seconds"),
-            "elapsed_s": round(time.monotonic() - ctx._started, 3) if ctx._started else None,
+            "elapsed_s": round(time.monotonic() - ctx._live.t0, 3),
             "run": ctx.id,
-            "info": _plain(ckpt.info),
+            "info": plain(ckpt.info),
         }
         (staging / RECORD).write_text(yaml.safe_dump(record, sort_keys=False))
         _swap_in(staging, self.final)
-        ctx._checkpoints = ckpt.index
+        ctx._live.checkpoints = ckpt.index
         ckpt.dir = self.final
         point_latest(self.final)
+        # status.yaml names it at once (not throttled like progress): what a
+        # resume or an eval of an unfinished run would read
+        ctx._live.checkpoint = f"{FOLDER}/{ckpt.name}"
+        ctx._write_running()
         return False
 
 
@@ -101,23 +104,6 @@ def _swap_in(staging, final):
     os.replace(staging, final)
     if old is not None:
         shutil.rmtree(old, ignore_errors=True)
-
-
-def _plain(v):
-    """What yaml.safe_dump can write: numpy scalars and arrays become python
-    values, anything else unknown its repr. Never raises -- info must not cost
-    the checkpoint."""
-    if isinstance(v, dict):
-        return {str(k): _plain(x) for k, x in v.items()}
-    if isinstance(v, (list, tuple)):
-        return [_plain(x) for x in v]
-    if isinstance(v, np.generic):
-        return v.item()
-    if isinstance(v, np.ndarray):
-        return v.tolist()
-    if v is None or isinstance(v, (bool, int, float, str)):
-        return v
-    return repr(v)
 
 
 def load_checkpoints(run_dir):

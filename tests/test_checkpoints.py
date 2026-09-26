@@ -151,3 +151,29 @@ def test_a_killed_save_is_ignored(tmp_path):
         return [c.name for c in ctx.checkpoints()]
 
     assert _go(_exp(body), tmp_path).retval == ["000001"]
+
+
+def test_status_names_the_latest_checkpoint_by_its_path(tmp_path):
+    def body(cfg: Cfg, ctx: RunContext):
+        seen = [yaml.safe_load((ctx.dir / "status.yaml").read_text())["checkpoint"]]
+        with ctx.checkpoint():
+            pass
+        seen.append(yaml.safe_load((ctx.dir / "status.yaml").read_text())["checkpoint"])
+        with ctx.checkpoint("best"):
+            pass
+        if cfg.fail_at == 0:
+            raise ValueError("after checkpointing")
+        return seen
+
+    r = _go(_exp(body), tmp_path)
+    assert r.retval == [None, "checkpoints/000001"]           # written at once, mid-run
+    status = yaml.safe_load((r.context.dir / "status.yaml").read_text())
+    assert status["checkpoint"] == "checkpoints/best"         # kept in the final write
+    assert (r.context.dir / status["checkpoint"] / "checkpoint.yaml").is_file()
+
+    with pytest.raises(ValueError):                           # a failed run says what to resume from
+        _go(_exp(body), tmp_path, "fail_at=0")
+    statuses = [yaml.safe_load((d / "status.yaml").read_text())
+                for d in (tmp_path / "ck").glob("2*")]
+    st = next(s for s in statuses if s["status"] == "failed")
+    assert st["checkpoint"] == "checkpoints/best"

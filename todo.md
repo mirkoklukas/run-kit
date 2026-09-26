@@ -5,16 +5,16 @@
   Left: captured stdout as a runkit-owned file in the run dir.
 - [x] **checkpoint callback and organization** — built: `with ctx.checkpoint(name=None)
   as ckpt:` -> `{run dir}/checkpoints/<name>/` plus `checkpoint.yaml` and a `latest`
-  link; `ctx.checkpoints()` / `load_checkpoints` read them back; `ctx.live`. Open:
-  retention, a record in `status.yaml`, eval of a not-`ok` run from its latest
-  checkpoint (proposals.md, "Checkpoints: open").
+  link; `checkpoint: checkpoints/<name>` in `status.yaml`; `ctx.checkpoints()` /
+  `load_checkpoints` read them back; `ctx.live`. Open: retention, eval of a
+  not-`ok` run from its latest checkpoint (proposals.md, "Checkpoints: open").
 - [x] **eval and visualization** — built as `@exp.eval` / `@exp.viz`. Left: eval's
   own parameters, and whether a loaded `Run` carries `status` (proposals.md,
   "Open between the proposals").
-- [ ] **progress and metrics** — `ctx.live`, `ctx.progress(n=None, *, total=None)`,
-  `ctx.record(stream=None, /, **values)` -> `metrics/<stream>.jsonl`. Designed;
-  see proposals.md, "Live runs: progress and metrics". Built so far: `updated`,
-  `host`, `pid` in `status.yaml`, atomic yaml writes.
+- [x] **progress and metrics** — built: `ctx.progress(n=None, /, *, total=None)` ->
+  `progress` / `total` in `status.yaml`; `ctx.record(stream=None, /, **values)` ->
+  `metrics/<stream>.jsonl`, read with `load_metrics`; `ctx.live`. Open: marking
+  eval re-runs, showing progress (proposals.md, "Progress and metrics: open").
 - [ ] **detached runs** — start a run in the background, follow its log, stop it
   cleanly (`runkit run --detach experiment.py ...`; the slot between verb and
   experiment is kept free for it), with `tail` / `stop` verbs. Needs captured
