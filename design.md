@@ -37,9 +37,9 @@ class Config:
 
 @exp.run
 def run(cfg: Config, ctx: RunContext):
-    ckpt = ctx.out / "checkpoints"       # ctx.out:  {run dir}/out -- write everything here
-    ckpt.mkdir()                         # ctx.id:   unique run id, "baseline_a3f9c1e7"
-    ...                                  # ctx.name: "baseline"
+    (ctx.out / "notes.txt").write_text("...")   # ctx.out:  {run dir}/out -- write everything here
+    ...                                  # ctx.id:   unique run id, "baseline_a3f9c1e7"
+                                         # ctx.name: "baseline"
     return {"loss": 0.31}                # optional -> retval.json
 
 
@@ -300,8 +300,9 @@ python experiment.py latest             # the same, the python way
 
 Both resolve the root as a run does (`--root`, else `experiment.toml`, else
 `./runs`). `root` with an experiment is that experiment's folder *in* the root;
-without one (or with a folder) it is the root itself. `latest` is computed from the run
-dirs (the latest started, as the `latest` link means), not read from the link.
+without one (or with a folder) it is the root itself. `latest` is computed from
+the run dirs (the latest started, as the `latest` link means), not read from the
+link.
 
 One catch: a bare first argument that is a verb is taken as the verb, so a
 config file named exactly `eval`, `viz`, `root` or `latest` (no extension)
@@ -345,7 +346,7 @@ runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a/
 ├── config.yaml        the resolved config -- what it ran with
 ├── run_context.yaml   id + name -- what it ran as
 ├── meta.yaml          tag, script, module -- how the attempt was staged
-├── status.yaml        running | ok | failed | interrupted, and how long
+├── status.yaml        running | ok | failed | interrupted; who, how far, how long
 ├── traceback.txt      only if the run raised
 ├── retval.json        the return value, if there was one (.npy for an array)
 ├── checkpoints/       only if the run used ctx.checkpoint (see "Checkpoints")
@@ -356,7 +357,9 @@ runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a/
 **runkit owns the top level; the experiment owns `out/`.** Of runkit's files,
 the first three are what the run was — in principle, enough to recreate it. The
 next two are how that run went. `retval.json` is the body's return value, but
-runkit writes it, so it sits at the top with the rest of runkit's records.
+runkit writes it, so it sits at the top with the rest of runkit's records; so do
+`checkpoints/` and `metrics/`, which runkit writes when the body asks (see
+below).
 
 "In principle" because the code is only referenced by `script:`, a path whose
 contents can change after the run. Pinning it down (commit sha, dirty flag,
@@ -529,8 +532,8 @@ def run(cfg: Config, ctx: RunContext):
 `status.yaml`, flat, next to `status` and `updated`. `n` is any count — env
 steps, iterations, candidates tried — since not every experiment has a "step";
 a bare percentage is `ctx.progress(0.32, total=1)`. `total` is sticky: set it
-once, and later calls pass only `n`; it stays null for an open-ended run. It is
-keyword-only, so `ctx.progress(5, 10)` cannot be misread. Writes happen at most
+once, and later calls pass only `n`; it stays null for an open-ended run.
+`total` is keyword-only, so `ctx.progress(5, 10)` cannot be misread. Writes happen at most
 every two seconds (or when `total` changes), so calling it every iteration is
 fine, and the run's final `status.yaml` keeps the last values — a failed run
 shows how far it got.
@@ -612,9 +615,13 @@ class RunContext:            # what the *body* is handed
     id: str                  # unique run id, "{name}_{hex8}"
     name: str | None = None  # the experiment's identity, from @experiment
 
-    @property
-    def out(self) -> Path:   # {dir}/out; everything the experiment writes goes here
-        return self.dir / "out"
+    out: Path                # property: {dir}/out; everything the experiment writes goes here
+    live: bool               # property: True only in the body of a running run
+
+    def checkpoint(self, name=None): ...          # live: with ... as ckpt -> checkpoints/<name>/
+    def progress(self, n=None, /, *, total=None): ...   # live: progress / total in status.yaml
+    def record(self, stream=None, /, **values): ...     # metrics/<stream>.jsonl
+    def checkpoints(self) -> list[Checkpoint]: ...      # any context: the complete ones
 
 
 @dataclass
@@ -649,6 +656,13 @@ is `load_run`, which opens a run dir whatever its status; there, check
 `tag` is likewise absent from `RunContext`. It stages an attempt; it is not the
 run's identity. It lives in `meta.yaml`.
 
+The methods are how the body asks runkit to write into the run while it goes
+(see "Checkpoints" and "Progress and metrics"). What they may do follows from
+`live`, which is about this process, not the run: true in the context the run
+wrapper hands the body, false once the body returns and in any context opened
+from disk. It is not written to `run_context.yaml` and not part of comparing
+contexts, so `load_run(...) == run(...)` still holds.
+
 ---
 
 ## How it works
@@ -661,11 +675,13 @@ the rest to that verb. For `run`:
    is loaded, `key=value` is merged on top, and the dataclass is built.
 2. **the wrapper creates the run** — a fresh run dir and the `RunContext`,
    frozen into `config.yaml` / `run_context.yaml` / `meta.yaml`, `status.yaml`
-   set to `running` — then calls your body. From here the body owns `ctx.out`;
-   runkit writes nothing more until it returns.
-3. **the wrapper closes the run** — `status.yaml` gets the verdict, a non-`None`
-   return value is dumped to `retval.{json|npy}`, and the caller gets a
-   `Run`.
+   set to `running` — then calls your body with a live context. From here the
+   body owns `ctx.out`, and runkit writes into the run only when the body asks
+   (`ctx.checkpoint`, `ctx.progress`, `ctx.record`) until it returns.
+3. **the wrapper closes the run** — the context stops being live, `status.yaml`
+   gets the verdict (keeping the last progress and checkpoint), a non-`None`
+   return value is dumped to `retval.{json|npy}`, the closing line is printed,
+   and the caller gets a `Run`.
 
 Config resolution belongs entirely to step 1. The decorator and its wrapper
 never see a yaml, a partial dict, or a precedence rule — they are handed a
@@ -678,8 +694,9 @@ replace it with one of runkit's own.
 
 For `eval` and `viz` there is nothing to create: argv names a run (`RUN`), the
 wrapper picks the run dir (`select_run`), rebuilds its `Run` (`load_run`) and
-calls the body with its config and context. Nothing is recorded; the body's
-output goes under `ctx.out`.
+calls the body with its config and a context that is not live. runkit records
+nothing about the call itself; the body's output goes under `ctx.out`, and its
+numbers, if any, to a metrics stream it names (`ctx.record("eval", ...)`).
 
 ### Run dir naming
 
@@ -771,7 +788,8 @@ whatever is registered on `run`'s experiment, and `eval=` / `viz=` take plain
   value as a default. `module:`, where there is one, does not have that
   problem -- it resolves wherever the package is importable.
 - **provenance.** `meta.yaml` is the open bag it goes in: git sha, dirty flag,
-  host, python version. A dirty-git gate would sit alongside it.
+  python version, installed packages. (The host the run executed on is already
+  in `status.yaml`.) A dirty-git gate would sit alongside it.
 - **captured stdout.** For a run that died on a cluster three days ago, the log
   is often the only thing you want, and the run dir has no equivalent today.
 - **the overrides, separately.** `config.yaml` records what the values *were*,
