@@ -8,6 +8,7 @@ Pure functions; no IO, no globals. Tested in isolation.
 """
 import dataclasses
 import inspect
+import secrets
 import types
 import typing
 
@@ -101,6 +102,26 @@ def _coerce(s):
     except ValueError:
         pass
     return s
+
+
+def random_seed(bits=31):
+    """A dataclass field whose default is a fresh random seed:
+
+        @dataclass
+        class Config:
+            seed: int = random_seed()
+
+    The seed is drawn when the config is built -- before runkit freezes it -- so
+    `config.yaml` records the number actually used and the run can be repeated
+    (`seed=<that number>`). Overriding (`seed=7`) skips the draw, and a config
+    thawed from `config.yaml` (eval, viz, `load_run`) keeps its recorded seed.
+
+    31 bits fits a signed 32-bit int, which every library takes as a seed.
+    Drawn from the OS (`secrets`), so it does not depend on any global random
+    state. The field is tagged `metadata={"runkit": "seed"}`.
+    """
+    return dataclasses.field(default_factory=lambda: secrets.randbits(bits),
+                             metadata={"runkit": "seed"})
 
 
 def annotated_cfg(fn):

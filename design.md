@@ -166,6 +166,25 @@ defaults with `lr` set: the nested override is applied to the field's default
 (`default_factory()` or `default`), and a subclass default stays that subclass.
 Only a nested field with no default is built fresh from its class.
 
+A random seed belongs in the config too: it changes what the run produces, so
+it is part of *what* the experiment does, not of staging. For a fresh seed per
+run, `random_seed()` is a field whose default is drawn when the config is built
+— before it is frozen — so `config.yaml` records the number actually used:
+
+```python
+from runkit import random_seed
+
+@dataclass
+class Config:
+    seed: int = random_seed()      # e.g. seed: 1978328730 in config.yaml
+```
+
+`seed=7` overrides it (no draw), `seed=1978328730` repeats that run, and `eval`
+/ `viz` get the recorded seed back. The banner always shows a drawn seed, since
+it never equals "the default". For a fixed default, it is just `seed: int = 0`.
+runkit does not seed any library itself: how a seed is used (numpy, torch, JAX
+keys) is the experiment's business.
+
 The config yaml is named either as a bare positional or as `--config=PATH`
 (giving both is an error unless they agree). Its path may carry a scheme:
 

@@ -421,3 +421,26 @@ def test_status_names_the_process_that_owns_the_run(tmp_path):
     assert after["status"] == "ok" and after["pid"] == os.getpid()
     assert after["updated"] >= during["updated"]
     assert not list(r.context.dir.glob(".*.tmp"))                    # atomic writes leave nothing
+
+
+def test_random_seed_is_drawn_per_config_and_recorded(tmp_path):
+    from runkit import random_seed
+
+    @dataclass
+    class Seeded:
+        seed: int = random_seed()
+        lr: float = 1e-3
+
+    seeds = [Seeded().seed for _ in range(5)]
+    assert len(set(seeds)) > 1                                 # a fresh draw per config
+    assert all(0 <= s < 2 ** 31 for s in seeds)
+    assert dataclasses.fields(Seeded)[0].metadata["runkit"] == "seed"
+
+    @experiment(name="seeded")
+    def seeded(cfg: Seeded, ctx: RunContext):
+        return cfg.seed
+
+    r = main(seeded, [f"--root={tmp_path}"])
+    assert _yaml(r.context.dir, "config.yaml")["seed"] == r.retval       # the drawn one
+    assert build_cfg(Seeded, _yaml(r.context.dir, "config.yaml")).seed == r.retval  # kept on thaw
+    assert main(seeded, ["seed=7", f"--root={tmp_path}"]).retval == 7    # override skips it
