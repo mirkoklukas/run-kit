@@ -308,3 +308,27 @@ def test_follow_another_stream(tmp_path, capsys):
     assert cli.main(["metrics", str(d), "eval:", "-f"]) == "ok"
     out = capsys.readouterr().out.splitlines()
     assert out[0].split() == ["time", "ret"] and out[1].split()[1] == "7.5"
+
+
+def test_keys_group_by_their_prefix(tmp_path, monkeypatch):
+    from runkit import metrics as m
+    assert m._groups(["it", "loss/train", "loss", "loss/eval", "a/b/c", "a/b/d"]) == {
+        "it": ["it"], "loss": ["loss/train", "loss", "loss/eval"], "a/b": ["a/b/c", "a/b/d"]}
+
+    exp = Experiment("grp")
+
+    @exp.run
+    def run(cfg: Cfg, ctx: RunContext):
+        for i in range(5):
+            ctx.record(**{"it": i, "loss/train": 1 / (i + 1), "loss/eval": 2 / (i + 1)})
+
+    d = exp.main([f"--root={tmp_path}"]).context.dir
+    drawn = []
+    real = m._groups
+    monkeypatch.setattr(m, "_groups", lambda keys: drawn.append(real(keys)) or real(keys))
+    plot_metrics(d, [])                                         # the overview: grouped panels
+    assert drawn == [{"it": ["it"], "loss": ["loss/train", "loss/eval"]}]
+    one = plot_metrics(d, ["loss/"])                            # a group on one axis
+    assert one.name == "loss-train__loss-eval_vs_line.png"
+    with pytest.raises(ValueError, match="no keys nope/"):
+        plot_metrics(d, ["nope/"])

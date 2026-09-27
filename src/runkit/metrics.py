@@ -254,6 +254,8 @@ def plot_metrics(run_dir, ys, x=None, out=None, *, rows=None, start=None, end=No
         stream = ys[0][:-1] if ys else "run"
         return _plot_all(plt, run_dir, stream or "run", x, out, rows, start, end)
     series = [_series(s) for s in ys]
+    if any(key.endswith("/") for _, key in series):      # `loss/`: every `loss/...` key
+        series, ys = _expand_groups(run_dir, series)
     if x is None and len({stream for stream, _ in series}) > 1:
         raise ValueError("plot: series from several streams need an x key they share, "
                          "e.g. --x steps (x='steps'), or --x _elapsed_s -- line numbers "
@@ -294,6 +296,20 @@ def plot_metrics(run_dir, ys, x=None, out=None, *, rows=None, start=None, end=No
     return _save(plt, fig, out, run_dir, name, x, rows, start, end)
 
 
+def _expand_groups(run_dir, series):
+    """(stream, "loss/") -> (stream, "loss/train"), (stream, "loss/eval"), ..."""
+    out = []
+    for stream, key in series:
+        if not key.endswith("/"):
+            out.append((stream, key))
+            continue
+        have = [k for k in _columns(load_metrics(run_dir, stream)) if k.startswith(key)]
+        if not have:
+            raise ValueError(f"plot: no keys {key}... in stream {stream!r}")
+        out += [(stream, k) for k in have]
+    return out, [k if s == "run" else f"{s}:{k}" for s, k in out]
+
+
 def _plot_all(plt, run_dir, stream, x, out, rows, start, end):
     """Every numeric key of `stream` in its own subplot, against x or the line."""
     full = _columns(load_metrics(run_dir, stream))
@@ -307,29 +323,45 @@ def _plot_all(plt, run_dir, stream, x, out, rows, start, end):
     if not keys:
         raise ValueError(f"plot: stream {stream!r} has no numeric keys to plot")
     cols = _select(run_dir, stream, full, rows=rows, x=x, start=start, end=end)
-    ncols = min(3, len(keys))
-    nrows = -(-len(keys) // ncols)
+    groups = _groups(keys)
+    ncols = min(3, len(groups))
+    nrows = -(-len(groups) // ncols)
     fig, axes = plt.subplots(nrows, ncols, figsize=(4.4 * ncols, 2.7 * nrows),
                              sharex=True, squeeze=False)
-    for i, key in enumerate(keys):
+    for i, (title, members) in enumerate(groups.items()):
         ax = axes.flat[i]
-        if cols:
-            yv, xv = cols[key], cols[axis_key]
-            ok = ~np.isnan(yv) & ~np.isnan(xv)
-            ax.plot(xv[ok], yv[ok], marker="o", ms=_marker_size(ok.sum()), lw=1)
-        ax.set_title(key, fontsize=9)
+        for key in members:
+            if cols:
+                yv, xv = cols[key], cols[axis_key]
+                ok = ~np.isnan(yv) & ~np.isnan(xv)
+                ax.plot(xv[ok], yv[ok], marker="o", ms=_marker_size(ok.sum()), lw=1,
+                        label=key.rsplit("/", 1)[-1] if "/" in key else key)
+        if len(members) > 1:
+            ax.legend(fontsize=7)
+        ax.set_title(title, fontsize=9)
         ax.grid(alpha=0.3)
         ax.tick_params(labelsize=8)
-    for ax in axes.flat[len(keys):]:
+    n = len(groups)
+    for ax in axes.flat[n:]:
         ax.set_visible(False)
     for ax in axes[-1]:                                   # x label on the bottom row
         ax.set_xlabel(x or "line (record call)", fontsize=8)
-    for i in range(len(keys), nrows * ncols):             # a hidden panel: label the one above
+    for i in range(n, nrows * ncols):                     # a hidden panel: label the one above
         axes.flat[i - ncols].set_xlabel(x or "line (record call)", fontsize=8)
         axes.flat[i - ncols].xaxis.set_tick_params(labelbottom=True)
     fig.suptitle(f"{run_dir.resolve().name} · {FOLDER}/{stream}.jsonl", fontsize=9)
     return _save(plt, fig, out, run_dir, "all" if stream == "run" else f"{stream}-all",
                  x, rows, start, end)
+
+
+def _groups(keys):
+    """Keys by their prefix before the last `/`, in order: `loss/train` and
+    `loss/eval` share the subplot `loss`; a key without `/` is its own (and
+    joins a group of its name: `loss` with `loss/eval`)."""
+    groups = {}
+    for k in keys:
+        groups.setdefault(k.rsplit("/", 1)[0] if "/" in k else k, []).append(k)
+    return groups
 
 
 def _marker_size(n):

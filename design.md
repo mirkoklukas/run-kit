@@ -809,7 +809,12 @@ runkit metrics runs/x/latest --start best                 # summary since "best"
 
 Without keys, `plot` draws every numeric key of the `run` stream (or of
 `stream:`) in its own subplot, sharing the x axis — the quick "how did this run
-go" of any experiment, to `metrics/all_vs_line.png`. Named keys go on one axis
+go" of any experiment, to `metrics/all_vs_line.png`. Keys sharing a prefix
+before the last `/` share a subplot, with a legend: `loss/train` and
+`loss/eval` are drawn together under `loss`, `terms/lin`, `terms/yaw` under
+`terms`. A key ending in `/` names such a group on its own: `runkit plot RUN
+loss/` draws every `loss/...` key on one axis. (`ctx.record(**{"loss/train":
+...})` records such keys — any string works through `**`.) Named keys go on one axis
 instead: `plot` takes them as `key` (the `run` stream) or `stream:key`. With `--x KEY`,
 each series is drawn against that key *from its own stream*, so streams need not
 line up: training and eval returns land on one `steps` axis. Without it, the x axis is the line number, which only means the
