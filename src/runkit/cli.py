@@ -4,7 +4,7 @@ Usage:
     runkit <verb> [runkit options] <experiment> [args ...]
     runkit root [FOLDER]
     runkit metrics [RUN_DIR] [STREAM] [--rows A:B] [--start V] [--end V] [--x KEY]
-    runkit plot [RUN_DIR] KEY [KEY ...] [--x KEY] [--rows A:B] [--start V] [--end V] [--out FILE]
+    runkit plot [RUN_DIR] [KEY ...] [--x KEY] [--rows A:B] [--start V] [--end V] [--out FILE]
 
 verbs: run, eval, viz (as registered on the experiment), root, latest
 
@@ -24,7 +24,8 @@ experiment, `runkit root [FOLDER]` prints the root itself, resolved from FOLDER
 `metrics` prints one stream's keys with their rows, last, min and max. `plot`
 draws keys to a PNG in the run's metrics/ folder: KEY is `key` (the `run`
 stream) or `stream:key`; `--x KEY` plots against a key of each series' own
-stream, else against the line number.
+stream, else against the line number. No KEY (or a lone `stream:`): every
+numeric key of the stream, one subplot each.
 
 Both select lines with `--rows A:B` (a python slice of line numbers, negatives
 from the end: `--rows -1000:`) and `--start V` / `--end V` (an inclusive window
@@ -185,7 +186,7 @@ def metrics_cmd(argv):
 def plot_cmd(argv):
     """`runkit plot [RUN_DIR] KEY [KEY ...] [--x KEY] [selection] [--out FILE]`: to a PNG."""
     from .metrics import plot_metrics
-    usage = ("usage: runkit plot [RUN_DIR] KEY [KEY ...] [--x KEY] "
+    usage = ("usage: runkit plot [RUN_DIR] [KEY ...] [--x KEY] "
              "[--rows A:B] [--start V] [--end V] [--out FILE]")
     opts, positional = _options(argv, ("x", "out", "rows", "start", "end"), usage)
     run_dir, ys = _run_dir_and_rest(positional, usage)

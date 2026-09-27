@@ -742,7 +742,9 @@ off a cluster to a machine without the experiment's dependencies:
 ```bash
 runkit metrics runs/baseline/latest            # the `run` stream: keys, rows, last, min, max
 runkit metrics runs/baseline/latest eval       # another stream
-runkit plot runs/baseline/latest loss                              # against the line number
+runkit plot runs/baseline/latest                                   # every key, a subplot each
+runkit plot runs/baseline/latest eval: --x steps                   # ... of another stream
+runkit plot runs/baseline/latest loss                              # one key, against the line number
 runkit plot runs/baseline/latest ep_return eval:ep_return --x steps
 ```
 
@@ -774,7 +776,10 @@ runkit metrics runs/x/latest --start best                 # summary since "best"
   each other. From python: `compile_metrics(run_dir, start="best")["loss"][-1000:]`,
   `plot_metrics(..., rows="-1000:", start="best", end="last")`.
 
-`plot` takes keys as `key` (the `run` stream) or `stream:key`. With `--x KEY`,
+Without keys, `plot` draws every numeric key of the `run` stream (or of
+`stream:`) in its own subplot, sharing the x axis — the quick "how did this run
+go" of any experiment, to `metrics/all_vs_line.png`. Named keys go on one axis
+instead: `plot` takes them as `key` (the `run` stream) or `stream:key`. With `--x KEY`,
 each series is drawn against that key *from its own stream*, so streams need not
 line up: training and eval returns land on one `steps` axis. Without it, the x axis is the line number, which only means the
 same thing within one stream — series from several streams need `--x`. The PNG

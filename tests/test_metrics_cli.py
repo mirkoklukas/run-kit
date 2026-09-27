@@ -151,3 +151,20 @@ def test_plot_and_metrics_take_the_selection(ckpt_run, capsys):
     assert "5 rows" in capsys.readouterr().out
     with pytest.raises(SystemExit, match="neither a number nor a checkpoint"):
         cli.main(["metrics", str(ckpt_run), "--start", "nope"])
+
+
+def test_plot_without_keys_draws_every_numeric_key(run_dir, capsys):
+    out = plot_metrics(run_dir, [])
+    assert out.name == "all_vs_line.png" and out.stat().st_size > 0
+    assert plot_metrics(run_dir, ["eval:"], x="steps").name == "eval-all_vs_steps.png"
+    assert cli.main(["plot", str(run_dir)]).name == "all_vs_line.png"      # the command, no key
+    assert cli.main(["plot", str(run_dir), "--rows", "-5:"]).name == "all_vs_line_rows-5-.png"   # ":" kept out of file names
+
+
+def test_plot_all_needs_numbers(run_dir):
+    with open(run_dir / "metrics" / "words.jsonl", "w") as f:
+        f.write('{"_time": "t", "_elapsed_s": 0, "note": "hi"}\n')
+    with pytest.raises(ValueError, match="no numeric keys"):
+        plot_metrics(run_dir, ["words:"])
+    with pytest.raises(ValueError, match="no stream 'nope'"):
+        plot_metrics(run_dir, ["nope:"])

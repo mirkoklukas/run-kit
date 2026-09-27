@@ -230,7 +230,9 @@ def _series(spec):
 def plot_metrics(run_dir, ys, x=None, out=None, *, rows=None, start=None, end=None):
     """Plot metrics of a run to a PNG; returns its path.
 
-    `ys`: keys to plot, each `key` (the `run` stream) or `stream:key`.
+    `ys`: keys to plot, each `key` (the `run` stream) or `stream:key`, drawn
+    on one axis. Empty (or a lone `stream:`): every numeric key of that stream
+    (default `run`), one subplot each -- the quick overview of a run.
     `x`: a key to plot against; each series uses the `x` of its own stream, so
     streams need not line up -- with `x="steps"`, a training and an eval return
     land on one axis. Without `x`, the line number, which only means the same
@@ -247,8 +249,10 @@ def plot_metrics(run_dir, ys, x=None, out=None, *, rows=None, start=None, end=No
     run_dir = pathlib.Path(run_dir)
     if isinstance(ys, str):
         ys = [ys]
-    if not ys:
-        raise ValueError("plot: name at least one key to plot")
+    ys = list(ys or [])
+    if not ys or (len(ys) == 1 and ys[0].endswith(":")):
+        stream = ys[0][:-1] if ys else "run"
+        return _plot_all(plt, run_dir, stream or "run", x, out, rows, start, end)
     series = [_series(s) for s in ys]
     if x is None and len({stream for stream, _ in series}) > 1:
         raise ValueError("plot: series from several streams need an x key they share, "
@@ -286,8 +290,52 @@ def plot_metrics(run_dir, ys, x=None, out=None, *, rows=None, start=None, end=No
         ax.legend()
     ax.set_title(run_dir.resolve().name, fontsize=9)
     ax.grid(alpha=0.3)
+    name = "__".join(s.replace(":", "-") for s in ys)
+    return _save(plt, fig, out, run_dir, name, x, rows, start, end)
+
+
+def _plot_all(plt, run_dir, stream, x, out, rows, start, end):
+    """Every numeric key of `stream` in its own subplot, against x or the line."""
+    full = _columns(load_metrics(run_dir, stream))
+    if not full:
+        raise ValueError(f"plot: no stream {stream!r} in {run_dir / FOLDER} "
+                         f"(streams: {', '.join(streams(run_dir)) or 'none'})")
+    axis_key = x or "_line"
+    _numeric(full, axis_key, stream)
+    keys = [k for k, c in full.items()
+            if not k.startswith("_") and k != x and c.dtype == float]
+    if not keys:
+        raise ValueError(f"plot: stream {stream!r} has no numeric keys to plot")
+    cols = _select(run_dir, stream, full, rows=rows, x=x, start=start, end=end)
+    ncols = min(3, len(keys))
+    nrows = -(-len(keys) // ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4.4 * ncols, 2.7 * nrows),
+                             sharex=True, squeeze=False)
+    for i, key in enumerate(keys):
+        ax = axes.flat[i]
+        if cols:
+            yv, xv = cols[key], cols[axis_key]
+            ok = ~np.isnan(yv) & ~np.isnan(xv)
+            ax.plot(xv[ok], yv[ok], marker="o" if ok.sum() <= 30 else None, ms=3, lw=1)
+        ax.set_title(key, fontsize=9)
+        ax.grid(alpha=0.3)
+        ax.tick_params(labelsize=8)
+    for ax in axes.flat[len(keys):]:
+        ax.set_visible(False)
+    for ax in axes[-1]:                                   # x label on the bottom row
+        ax.set_xlabel(x or "line (record call)", fontsize=8)
+    for i in range(len(keys), nrows * ncols):             # a hidden panel: label the one above
+        axes.flat[i - ncols].set_xlabel(x or "line (record call)", fontsize=8)
+        axes.flat[i - ncols].xaxis.set_tick_params(labelbottom=True)
+    fig.suptitle(f"{run_dir.resolve().name} · {FOLDER}/{stream}.jsonl", fontsize=9)
+    return _save(plt, fig, out, run_dir, "all" if stream == "run" else f"{stream}-all",
+                 x, rows, start, end)
+
+
+def _save(plt, fig, out, run_dir, name, x, rows, start, end):
+    """Save to `out`, or to `{run_dir}/metrics/<name>_vs_<x>[_<range>].png`."""
     if out is None:
-        name = "__".join(s.replace(":", "-") for s in ys) + f"_vs_{x or 'line'}"
+        name += f"_vs_{x or 'line'}"
         if rows is not None:
             name += f"_rows{rows if isinstance(rows, str) else f'{rows.start}:{rows.stop}'}"
         if start is not None:
