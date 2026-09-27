@@ -36,7 +36,8 @@ of it: `eval: ret len`, `loss eval: ret`, `eval:`.
 Options: `--x KEY` (plot, info: the x axis), `--rows A:B` (a python slice of
 line numbers, negatives from the end), `--start V` / `--end V` (an inclusive
 window on the x axis: a value, negative counting back from the end, or a
-checkpoint name), `--out FILE` (plot).
+checkpoint name), `--out FILE` (plot), `--sort COLUMN` (info: a numeric column
+by absolute value, largest first; or `key`, `rows`).
 """
 import importlib
 import importlib.util
@@ -141,12 +142,13 @@ def _selection(opts):
 
 METRICS_ACTIONS = ("info", "follow", "plot")
 _USAGE = {
-    "info": "usage: runkit metrics [info] [PATH] [KEY ...] [--rows A:B] [--start V] [--end V] [--x KEY]",
+    "info": ("usage: runkit metrics [info] [PATH] [KEY ...] [--sort COLUMN] [--rows A:B] "
+             "[--start V] [--end V] [--x KEY]"),
     "follow": "usage: runkit metrics follow [PATH] [KEY ...] [--rows A:B]",
     "plot": ("usage: runkit metrics plot [PATH] [KEY ...] [--x KEY] [--rows A:B] "
              "[--start V] [--end V] [--out FILE]"),
 }
-_OPTIONS = {"info": ("rows", "start", "end", "x"), "follow": ("rows",),
+_OPTIONS = {"info": ("rows", "start", "end", "x", "sort"), "follow": ("rows",),
             "plot": ("x", "out", "rows", "start", "end")}
 
 
@@ -275,6 +277,8 @@ def _metrics_info(run_dir, series, opts, usage):
         tables[s] = rows if keys is None else [r for r in rows if r["key"] in keys]
     if failed and not tables:                # a bad selection: nothing to show at all
         sys.exit(str(next(iter(failed.values()))))
+    if opts.get("sort"):
+        tables = {s: _sorted_rows(rows, opts["sort"], usage) for s, rows in tables.items()}
     for s in order:
         if s in tables:
             _print_stream(s, tables[s])
@@ -314,6 +318,24 @@ def _fmt(v, sign=False):
     if a >= 1e4:
         return s + ui._num(a)
     return f"{s}{a:.4g}"
+
+
+SORT_COLUMNS = ("key", "rows", "last", "min", "max", "mean", "std", "trend")
+
+
+def _sorted_rows(rows, column, usage):
+    """A stream's table rows by `column`: `key` alphabetically, `rows` most
+    first, a numeric column by absolute value, largest first -- a large cost
+    ranks with a large reward. Rows without a number go last."""
+    if column not in SORT_COLUMNS:
+        sys.exit(f"--sort takes one of {', '.join(SORT_COLUMNS)} (got {column!r})\n\n{usage}")
+    if column == "key":
+        return sorted(rows, key=lambda r: r["key"])
+    if column == "rows":
+        return sorted(rows, key=lambda r: -r["rows"])
+    number = lambda r: isinstance(r.get(column), (int, float)) and not isinstance(r[column], bool)
+    return (sorted([r for r in rows if number(r)], key=lambda r: -abs(r[column]))
+            + [r for r in rows if not number(r)])
 
 
 def _trend_text(r):

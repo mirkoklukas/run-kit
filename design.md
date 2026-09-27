@@ -749,6 +749,7 @@ runkit metrics plot   [PATH] [KEY ...]      # to a PNG in the run's metrics/
 ```bash
 runkit metrics runs/baseline/latest                     # every stream and its keys
 runkit metrics runs/baseline/latest eval: ret len       # keys of eval
+runkit metrics runs/baseline/latest reward/ --sort std  # a group, largest std first
 runkit metrics follow runs/baseline/latest              # follow `run` as it goes
 runkit metrics follow runs/baseline/latest eval:        # ... or another stream
 runkit metrics plot runs/baseline/latest                # every key, a subplot each
@@ -787,7 +788,10 @@ under 4 values). A per-row derivative of noisy metrics would be mostly noise;
 half against half is not. Over a group (`runkit metrics RUN reward/ --start
 -1000`) the table compares its terms: mean for the net contribution, std for
 how much a term varies — what steers a policy gradient, since a steady term
-mostly shifts the value estimate.
+mostly shifts the value estimate. `--sort COLUMN` orders each stream's
+table: a numeric column by absolute value, largest first (so a large cost ranks
+with a large reward), `key` alphabetically, `rows` by count; keys without a
+number go last.
 
 **Following a run.** `runkit metrics follow [PATH] [KEY ...]` prints
 the stream's last 10 rows as a table (`--rows` picks others), then each new row

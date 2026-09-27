@@ -402,3 +402,22 @@ def test_trend_is_later_half_minus_earlier_half(tmp_path, capsys):
             if line.strip() and line.split()[0] in ("up", "down", "flat", "rare")}
     assert rows["up"].rstrip().endswith("↑ +4") and rows["down"].rstrip().endswith("↓ -4")
     assert "→" in rows["flat"] and "↑" not in rows["rare"] and "→" not in rows["rare"]
+
+
+def test_sort(tmp_path):
+    exp = Experiment("sort")
+
+    @exp.run
+    def run(cfg: Cfg, ctx: RunContext):
+        for i in range(6):
+            ctx.record(**{"reward/lin": 0.4 + 0.1 * (i % 2), "reward/slip": -0.9,
+                          "reward/yaw": 0.1 * (-1) ** i, "note": "x"})
+
+    d = exp.main([f"--root={tmp_path}"]).context.dir
+    order = lambda *a: [r["key"] for r in cli.main(["metrics", str(d), *a])["run"]]
+    assert order("reward/", "--sort", "mean") == ["reward/slip", "reward/lin", "reward/yaw"]  # |mean|
+    assert order("reward/", "--sort", "std") == ["reward/yaw", "reward/lin", "reward/slip"]
+    assert order("reward/", "note", "--sort", "key")[-1] == "reward/yaw"
+    assert order("--sort", "std")[-1] in ("_time", "note")               # no number: last
+    with pytest.raises(SystemExit, match="--sort takes one of"):
+        cli.main(["metrics", str(d), "--sort", "nope"])
