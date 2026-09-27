@@ -198,8 +198,8 @@ def streams(run_dir):
 
 
 def summarize_metrics(run_dir, stream="run", *, rows=None, x=None, start=None, end=None):
-    """Per key of one stream: how many lines have it, and its last / min / max
-    (numeric keys only; None otherwise). What `runkit metrics` prints. `x`,
+    """Per key of one stream: how many lines have it, and its last / min / max /
+    mean over the values it has (numeric keys only; None otherwise). What `runkit metrics` prints. `x`,
     `start`, `end` as for `compile_metrics`; then `rows`, a slice of the lines
     (`"-1000:"`)."""
     m = _select(run_dir, stream, _columns(load_metrics(run_dir, stream)),
@@ -213,18 +213,19 @@ def summarize_metrics(run_dir, stream="run", *, rows=None, x=None, start=None, e
             out.append({"key": k, "rows": len(vals),
                         "last": vals[-1].item() if len(vals) else None,
                         "min": vals.min().item() if len(vals) else None,
+                        "mean": vals.mean().item() if len(vals) else None,
                         "max": vals.max().item() if len(vals) else None})
         else:
             present = [v for v in col if v is not None]
-            out.append({"key": k, "rows": len(present),
-                        "last": present[-1] if present else None, "min": None, "max": None})
+            out.append({"key": k, "rows": len(present), "last": present[-1] if present else None,
+                        "min": None, "mean": None, "max": None})
     return out
 
 
 def _series(spec):
     """"key" -> ("run", "key");  "eval:key" -> ("eval", "key")."""
-    stream, sep, key = spec.rpartition(":")
-    return (stream if sep else "run"), key
+    stream, sep, key = spec.partition(":")    # the first ':': keys may contain one
+    return (stream, key) if sep else ("run", spec)
 
 
 def plot_metrics(run_dir, ys, x=None, out=None, *, rows=None, start=None, end=None):

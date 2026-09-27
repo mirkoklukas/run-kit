@@ -30,7 +30,8 @@ def run_dir(tmp_path):
 
 def test_summary(run_dir):
     by_key = {r["key"]: r for r in summarize_metrics(run_dir)}
-    assert by_key["it"] == {"key": "it", "rows": 20, "last": 19.0, "min": 0.0, "max": 19.0}
+    assert by_key["it"] == {"key": "it", "rows": 20, "last": 19.0, "min": 0.0, "mean": 9.5,
+                            "max": 19.0}
     assert by_key["_time"]["min"] is None and by_key["_time"]["rows"] == 20
     assert {r["key"]: r["rows"] for r in summarize_metrics(run_dir, "eval")}["ret"] == 4
 
@@ -62,28 +63,35 @@ def test_runkit_metrics_and_plot_commands(run_dir, capsys, monkeypatch):
     assert "20000" in out and "e+04" not in out                  # integers stay integers
     assert {r["key"] for r in overview["run"]} >= {"it", "steps", "loss"}
     assert {r["key"] for r in overview["eval"]} >= {"steps", "ret"}
-    rows = cli.main(["metrics", str(run_dir), "loss"])            # a key: one stream
-    assert "also: eval" in capsys.readouterr().out and [r["key"] for r in rows] == ["loss"]
+    tables = cli.main(["metrics", "info", str(run_dir), "loss"])  # a key: its stream
+    assert [r["key"] for r in tables["run"]] == ["loss"] and list(tables) == ["run"]
+    capsys.readouterr()
 
-    png = cli.main(["plot", str(run_dir), "loss", "eval:ret", "--x", "steps"])
+    png = cli.main(["metrics", "plot", str(run_dir), "loss", "eval:ret", "--x", "steps"])
     assert capsys.readouterr().out.strip() == str(png) and png.is_file()
 
-    monkeypatch.chdir(run_dir)                                   # RUN_DIR defaults to cwd
-    assert cli.main(["metrics", "eval:"])[0]["key"] == "_time"           # another stream
-    assert cli.main(["plot", "loss", "--x=it"]).name == "loss_vs_it.png"
+    monkeypatch.chdir(run_dir)                                   # PATH defaults to cwd
+    assert cli.main(["metrics", "eval:"])["eval"][0]["key"] == "_time"  # another stream
+    assert cli.main(["metrics", "plot", "loss", "--x=it"]).name == "loss_vs_it.png"
+    monkeypatch.chdir(run_dir / "metrics")                       # ... or its metrics/ folder
+    assert list(cli.main(["metrics"])) == ["run", "eval"]
 
 
 def test_commands_explain_bad_input(run_dir, tmp_path, monkeypatch):
     with pytest.raises(SystemExit, match="no metrics stream 'nope'"):
         cli.main(["metrics", str(run_dir), "nope:"])
-    with pytest.raises(SystemExit, match="no key\\(s\\) \\['nope'\\]"):
+    with pytest.raises(SystemExit, match="no key 'nope' in stream 'run'"):
         cli.main(["metrics", str(run_dir), "nope"])
-    with pytest.raises(SystemExit, match="one stream at a time"):
-        cli.main(["metrics", str(run_dir), "loss", "eval:ret"])
+    with pytest.raises(SystemExit, match="follow takes one stream"):
+        cli.main(["metrics", "follow", str(run_dir), "loss", "eval:ret"])
     with pytest.raises(SystemExit, match="need an x key"):
-        cli.main(["plot", str(run_dir), "loss", "eval:ret"])
+        cli.main(["metrics", "plot", str(run_dir), "loss", "eval:ret"])
     with pytest.raises(SystemExit, match="unknown option '--y'"):
-        cli.main(["plot", str(run_dir), "loss", "--y", "a"])
+        cli.main(["metrics", "plot", str(run_dir), "loss", "--y", "a"])
+    with pytest.raises(SystemExit, match="now `runkit metrics plot"):
+        cli.main(["plot", str(run_dir)])
+    with pytest.raises(SystemExit, match="now `runkit metrics follow"):
+        cli.main(["metrics", str(run_dir), "-f"])
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit, match="is not a run dir"):
         cli.main(["metrics"])
@@ -150,9 +158,10 @@ def test_a_stream_the_checkpoint_did_not_count_asks_for_a_value(ckpt_run):
 
 
 def test_plot_and_metrics_take_the_selection(ckpt_run, capsys):
-    png = cli.main(["plot", str(ckpt_run), "it", "--start", "000001", "--end", "000002"])
+    png = cli.main(["metrics", "plot", str(ckpt_run), "it", "--start", "000001", "--end", "000002"])
     assert png.name == "it_vs_line_start000001_end000002.png"
-    tail = cli.main(["plot", str(ckpt_run), "it", "eval:ret", "--x", "steps", "--start", "-1000"])
+    tail = cli.main(["metrics", "plot", str(ckpt_run), "it", "eval:ret", "--x", "steps",
+                     "--start", "-1000"])
     assert tail.name == "it__eval-ret_vs_steps_start-1000.png" and tail.is_file()
     rows = cli.main(["metrics", str(ckpt_run), "--rows", "-5:"])["run"]
     assert {r["key"]: r for r in rows}["it"]["min"] == 25.0
@@ -165,8 +174,8 @@ def test_plot_without_keys_draws_every_numeric_key(run_dir, capsys):
     out = plot_metrics(run_dir, [])
     assert out.name == "all_vs_line.png" and out.stat().st_size > 0
     assert plot_metrics(run_dir, ["eval:"], x="steps").name == "eval-all_vs_steps.png"
-    assert cli.main(["plot", str(run_dir)]).name == "all_vs_line.png"      # the command, no key
-    assert cli.main(["plot", str(run_dir), "--rows", "-5:"]).name == "all_vs_line_rows-5-.png"   # ":" kept out of file names
+    assert cli.main(["metrics", "plot", str(run_dir)]).name == "all_vs_line.png"   # no key
+    assert cli.main(["metrics", "plot", str(run_dir), "--rows", "-5:"]).name == "all_vs_line_rows-5-.png"   # ":" kept out of file names
 
 
 def test_plot_all_needs_numbers(run_dir):
@@ -180,9 +189,9 @@ def test_plot_all_needs_numbers(run_dir):
 
 
 def test_metrics_with_keys(run_dir):
-    rows = cli.main(["metrics", str(run_dir), "loss", "it"])
+    rows = cli.main(["metrics", str(run_dir), "loss", "it"])["run"]
     assert [r["key"] for r in rows] == ["it", "loss"]                # the stream's order
-    assert [r["key"] for r in cli.main(["metrics", str(run_dir), "eval:ret"])] == ["ret"]
+    assert [r["key"] for r in cli.main(["metrics", str(run_dir), "eval:ret"])["eval"]] == ["ret"]
 
 
 # -- following ------------------------------------------------------------------
@@ -256,7 +265,7 @@ def test_follow_with_keys_and_a_dead_process(tmp_path, capsys):
 def test_follow_from_the_command(tmp_path, monkeypatch, capsys):
     d = _live_run(tmp_path)
     _set_status(d, "failed", error="ValueError: boom")
-    assert cli.main(["metrics", str(d), "-f", "--rows", "-2:"]) == "failed"   # ends at once
+    assert cli.main(["metrics", "follow", str(d), "--rows", "-2:"]) == "failed"   # ends at once
     out, err = capsys.readouterr()
     assert [line.split()[1] for line in out.splitlines()[1:]] == ["10", "11"]
     assert "failed" in err and "ValueError: boom" in " ".join(err.split())
@@ -305,7 +314,7 @@ def test_follow_another_stream(tmp_path, capsys):
     with open(d / "metrics" / "eval.jsonl", "w") as f:
         f.write(json.dumps({"_elapsed_s": 3, "ret": 7.5}) + "\n")
     _set_status(d, "ok")
-    assert cli.main(["metrics", str(d), "eval:", "-f"]) == "ok"
+    assert cli.main(["metrics", "follow", str(d), "eval:"]) == "ok"
     out = capsys.readouterr().out.splitlines()
     assert out[0].split() == ["time", "ret"] and out[1].split()[1] == "7.5"
 
@@ -332,3 +341,37 @@ def test_keys_group_by_their_prefix(tmp_path, monkeypatch):
     assert one.name == "loss-train__loss-eval_vs_line.png"
     with pytest.raises(ValueError, match="no keys nope/"):
         plot_metrics(d, ["nope/"])
+
+
+
+def test_keys_switch_the_stream_for_the_keys_after_them():
+    assert cli.parse_keys([]) == []
+    assert cli.parse_keys(["loss"]) == [("run", "loss")]
+    assert cli.parse_keys(["eval:"]) == [("eval", "")]                    # all of it
+    assert cli.parse_keys(["eval:", "ret", "len"]) == [("eval", "ret"), ("eval", "len")]
+    assert cli.parse_keys(["loss", "eval:", "ret"]) == [("run", "loss"), ("eval", "ret")]
+    assert cli.parse_keys(["eval:ret", "loss"]) == [("eval", "ret"), ("run", "loss")]  # no switch
+    assert cli.parse_keys(["run:", "eval:", "ret"]) == [("run", ""), ("eval", "ret")]
+    assert cli.parse_keys(["eval:", "loss/"]) == [("eval", "loss/")]
+    assert cli.parse_keys(["run:a:b"]) == [("run", "a:b")]                # a key with a ':'
+    assert cli.parse_keys([], stream="eval") == [("eval", "")]             # a stream file
+    assert cli.parse_keys(["ret"], stream="eval") == [("eval", "ret")]
+
+
+def test_path_can_be_the_metrics_folder_or_a_stream_file(run_dir, capsys):
+    tables = cli.main(["metrics", str(run_dir / "metrics")])
+    assert list(tables) == ["run", "eval"]
+    tables = cli.main(["metrics", str(run_dir / "metrics" / "eval.jsonl"), "ret"])
+    assert list(tables) == ["eval"] and [r["key"] for r in tables["eval"]] == ["ret"]
+    png = cli.main(["metrics", "plot", str(run_dir / "metrics" / "eval.jsonl")])
+    assert png.name == "eval-all_vs_line.png"
+    with pytest.raises(SystemExit, match="is not a metrics stream"):
+        cli.main(["metrics", str(run_dir / "config.yaml")])
+
+
+def test_info_shows_several_streams_and_plot_mixes_them(run_dir, capsys):
+    tables = cli.main(["metrics", str(run_dir), "loss", "eval:", "ret"])
+    assert list(tables) == ["run", "eval"]
+    assert [r["key"] for r in tables["eval"]] == ["ret"]
+    png = cli.main(["metrics", "plot", str(run_dir), "loss", "eval:", "ret", "--x", "steps"])
+    assert png.name == "loss__eval-ret_vs_steps.png"

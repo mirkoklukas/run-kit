@@ -43,9 +43,9 @@ python experiment.py eval [RUN]
 runkit <verb> experiment.py ...           # runkit takes the verb first; or: some.module
 cd "$(runkit root)"                       # go where runs go
 cd "$(runkit latest experiment.py)"       # ... or to this experiment's latest run (or: root)
-runkit metrics runs/baseline/latest       # a run's metrics, no experiment import
-runkit metrics runs/baseline/latest -f    # ... followed as the run goes
-runkit plot runs/baseline/latest loss --x steps   # -> the run's metrics/ folder
+runkit metrics runs/baseline/latest            # a run's metrics, no experiment import
+runkit metrics follow runs/baseline/latest     # ... followed as the run goes
+runkit metrics plot runs/baseline/latest       # ... plotted: every key, or name some
 ```
 
 - bare `key=value` → overrides into **config** (the "what")

@@ -737,26 +737,52 @@ in a future `runkit ls` — where otherwise each experiment writes its own forma
 
 **Looking at them** needs no code, and no import of the experiment — just the
 run dir, so it works while a run is going, on a crashed one, and on runs copied
-off a cluster to a machine without the experiment's dependencies:
+off a cluster to a machine without the experiment's dependencies. One command,
+three actions, all taking the same PATH and KEYs:
 
 ```bash
-runkit metrics runs/baseline/latest            # every stream and its keys: rows, last, min, max
-runkit metrics runs/baseline/latest loss ret   # just these keys (of `run`)
-runkit metrics runs/baseline/latest eval:      # one stream
-runkit metrics runs/baseline/latest -f         # follow `run` as it goes (below)
-runkit metrics runs/baseline/latest eval: -f   # ... or another stream
-runkit plot runs/baseline/latest                                   # every key, a subplot each
-runkit plot runs/baseline/latest eval: --x steps                   # ... of another stream
-runkit plot runs/baseline/latest loss                              # one key, against the line number
-runkit plot runs/baseline/latest ep_return eval:ep_return --x steps
+runkit metrics [info] [PATH] [KEY ...]      # keys: rows, last, min, max, mean
+runkit metrics follow [PATH] [KEY ...]      # rows as they are written (below)
+runkit metrics plot   [PATH] [KEY ...]      # to a PNG in the run's metrics/
 ```
 
-Without keys, `metrics` is the overview of what a run recorded: every stream
-(`run` first), each with its keys; a run with nothing recorded says so. Keys
-narrow it, written as for `plot`: `key` for the `run` stream, `stream:key` for
-another, and a lone `stream:` for all of it — one stream per call.
+```bash
+runkit metrics runs/baseline/latest                     # every stream and its keys
+runkit metrics runs/baseline/latest eval: ret len       # keys of eval
+runkit metrics follow runs/baseline/latest              # follow `run` as it goes
+runkit metrics follow runs/baseline/latest eval:        # ... or another stream
+runkit metrics plot runs/baseline/latest                # every key, a subplot each
+runkit metrics plot runs/baseline/latest loss/ eval: ret --x steps
+```
 
-**Following a run.** `runkit metrics RUN_DIR [KEY ...] --follow` (`-f`) prints
+The action comes first, so the word after `metrics` is never mistaken for a
+run dir or a key; without one it is `info`, the command typed most.
+
+**PATH** is a run dir, its `metrics/` folder, or a stream file
+(`metrics/eval.jsonl`, which also sets the stream); default the current folder,
+read the same way. The run dir is what the commands need — `follow` reads
+`status.yaml`, `--start best` reads `checkpoints/` — so the other two resolve to
+it.
+
+**KEYs** name what to look at:
+
+| you write | means |
+| --------- | ----- |
+| `loss` | key `loss` of the current stream — `run`, or the stream file's |
+| `eval:ret` | key `ret` of `eval`, the current stream unchanged |
+| `eval: ret len` | a lone `stream:` switches the stream for the keys after it |
+| `eval:` | ... and with none after it, all of `eval` |
+| `loss/` | every `loss/...` key (a group) |
+| *(nothing)* | everything: every stream for `info`, `run` for `follow` / `plot` |
+
+The split is at the first `:` — stream names have none — so a key containing
+one is written with its stream: `run:a:b`. `info` shows every stream it is
+given, `run` first, each with its keys; with nothing named, every stream, and a
+run with nothing recorded says so. `follow` takes one stream. `plot` takes keys
+from several (they then need `--x`). The `mean` is over the values a key has,
+gaps left out.
+
+**Following a run.** `runkit metrics follow [PATH] [KEY ...]` prints
 the stream's last 10 rows as a table (`--rows` picks others), then each new row
 as it is written, from any terminal or machine that sees the run dir:
 
@@ -780,13 +806,13 @@ a new key appears, and every 40 rows. (`runkit tail` stays free for following a
 run's captured output, once that exists.)
 
 RUN_DIR defaults to the current folder (`cd "$(runkit latest experiment.py)"`,
-then `runkit metrics`). Both commands can look at a stretch of the lines:
+then `runkit metrics`). `info` and `plot` can look at a stretch of the lines:
 
 ```bash
-runkit plot runs/x/latest loss --rows -1000:              # the last 1000 lines
-runkit plot runs/x/latest loss --start -1000              # the same, as a window
-runkit plot runs/x/latest loss --x steps --start -1000000 # the last million steps
-runkit plot runs/x/latest loss --start 000002 --end best  # between two checkpoints
+runkit metrics plot runs/x/latest loss --rows -1000:              # the last 1000 lines
+runkit metrics plot runs/x/latest loss --start -1000              # the same, as a window
+runkit metrics plot runs/x/latest loss --x steps --start -1000000 # the last million steps
+runkit metrics plot runs/x/latest loss --start 000002 --end best  # between two checkpoints
 runkit metrics runs/x/latest --start best                 # summary since "best"
 ```
 
@@ -812,7 +838,7 @@ Without keys, `plot` draws every numeric key of the `run` stream (or of
 go" of any experiment, to `metrics/all_vs_line.png`. Keys sharing a prefix
 before the last `/` share a subplot, with a legend: `loss/train` and
 `loss/eval` are drawn together under `loss`, `terms/lin`, `terms/yaw` under
-`terms`. A key ending in `/` names such a group on its own: `runkit plot RUN
+`terms`. A key ending in `/` names such a group on its own: `runkit metrics plot RUN
 loss/` draws every `loss/...` key on one axis. (`ctx.record(**{"loss/train":
 ...})` records such keys — any string works through `**`.) Named keys go on one axis
 instead: `plot` takes them as `key` (the `run` stream) or `stream:key`. With `--x KEY`,
