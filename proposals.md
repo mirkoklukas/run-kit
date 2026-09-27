@@ -118,6 +118,15 @@ them mutually exclusive in one project instead —
   duplicate that. Add it if rewiring is ever needed.
 - **Per-command extras.** Extras belong to a module (its imports decide them), so
   overrides are per module.
+- **Per-machine settings.** Machine differences go in `pyproject.toml` markers
+  (see design.md, "Starting the process"), which cover the Mac-laptop vs.
+  Linux-GPU-box split. If a difference ever depends on hardware rather than
+  platform (a Linux box with vs. without a GPU), the design would be a named
+  profile each machine declares once (`export RUNKIT_PROFILE=gpu`) and the toml
+  defines (`[env.profile.gpu]`), applied between `[env]` and `[env.<stem>]` with
+  the same merge rules and recorded in `meta.yaml`'s `launch`. Not by hostname
+  (brittle), and not by an untracked local override file (runs on two machines
+  could silently differ).
 
 ---
 

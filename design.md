@@ -291,6 +291,22 @@ warns; an experiment file named like an `[env]` key (`vars.py`) cannot have an
 override and is refused. `python experiment.py` cannot change its own
 environment, so it runs as it is and records `launch: null`.
 
+**Machine differences belong in `pyproject.toml`, not here.** `experiment.toml`
+names extras, and the same names mean the right thing on each machine through
+dependency markers (PEP 508), which the installer evaluates where it installs:
+
+```toml
+# pyproject.toml
+gpu = ["jax[cuda12]; sys_platform == 'linux'"]   # CUDA JAX on Linux, nothing on macOS
+```
+
+`uv.lock` resolves every branch at once, so one lock serves the laptop and the
+GPU box. Markers see the platform (`sys_platform`, `platform_machine`,
+`python_version`), not the hardware — a Linux machine without a GPU gets the
+CUDA wheels too, and JAX falls back to CPU. In practice the split is a Mac
+laptop vs. a Linux GPU box, which markers cover, so `experiment.toml` stays
+machine-independent: the same file, the same command, on both.
+
 ```bash
 runkit root                              # the root, resolved from the current folder
 runkit root lab/rl_env                   # ... from that folder
