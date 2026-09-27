@@ -281,7 +281,7 @@ def plot_metrics(run_dir, ys, x=None, out=None, *, rows=None, start=None, end=No
             continue
         yv, xv = cols[key], cols[x or "_line"]
         ok = ~np.isnan(yv) & ~np.isnan(xv)
-        ax.plot(xv[ok], yv[ok], marker="o" if ok.sum() <= 30 else None, ms=3,
+        ax.plot(xv[ok], yv[ok], marker="o", ms=_marker_size(ok.sum()),
                 label=spec if stream != "run" or len(series) > 1 else key)
     ax.set_xlabel(x or "line (record call)")
     keys = {key for _, key in series}
@@ -316,7 +316,7 @@ def _plot_all(plt, run_dir, stream, x, out, rows, start, end):
         if cols:
             yv, xv = cols[key], cols[axis_key]
             ok = ~np.isnan(yv) & ~np.isnan(xv)
-            ax.plot(xv[ok], yv[ok], marker="o" if ok.sum() <= 30 else None, ms=3, lw=1)
+            ax.plot(xv[ok], yv[ok], marker="o", ms=_marker_size(ok.sum()), lw=1)
         ax.set_title(key, fontsize=9)
         ax.grid(alpha=0.3)
         ax.tick_params(labelsize=8)
@@ -330,6 +330,12 @@ def _plot_all(plt, run_dir, stream, x, out, rows, start, end):
     fig.suptitle(f"{run_dir.resolve().name} · {FOLDER}/{stream}.jsonl", fontsize=9)
     return _save(plt, fig, out, run_dir, "all" if stream == "run" else f"{stream}-all",
                  x, rows, start, end)
+
+
+def _marker_size(n):
+    """Every point gets a marker -- each is a record call -- smaller as they
+    crowd, so a long series stays a readable line."""
+    return 3.5 if n <= 50 else 2.0 if n <= 500 else 1.0
 
 
 def _save(plt, fig, out, run_dir, name, x, rows, start, end):
