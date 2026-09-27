@@ -3,7 +3,7 @@
 Usage:
     runkit <verb> [runkit options] <experiment> [args ...]
     runkit root [FOLDER]
-    runkit metrics [RUN_DIR] [STREAM] [--rows A:B] [--start V] [--end V] [--x KEY]
+    runkit metrics [RUN_DIR] [KEY ...] [--follow] [--rows A:B] [--start V] [--end V] [--x KEY]
     runkit plot [RUN_DIR] [KEY ...] [--x KEY] [--rows A:B] [--start V] [--end V] [--out FILE]
 
 verbs: run, eval, viz (as registered on the experiment), root, latest
@@ -21,7 +21,10 @@ experiment, `runkit root [FOLDER]` prints the root itself, resolved from FOLDER
 
 `metrics` and `plot` read a run dir's metrics without importing its experiment
 (RUN_DIR defaults to the current folder; `runs/<name>/latest` works).
-`metrics` prints one stream's keys with their rows, last, min and max. `plot`
+`metrics` prints every stream's keys with their rows, last, min and max (or,
+given KEYs, just those); with
+`--follow` (`-f`), its rows as they are written, the run's checkpoints, and its
+end. KEY picks keys, and a stream, as for plot (`eval:` for all of eval). `plot`
 draws keys to a PNG in the run's metrics/ folder: KEY is `key` (the `run`
 stream) or `stream:key`; `--x KEY` plots against a key of each series' own
 stream, else against the line number. No KEY (or a lone `stream:`): every
@@ -145,17 +148,51 @@ def _selection(opts):
             "x": opts.get("x")}
 
 
+def _stream_and_keys(specs, usage):
+    """`key` / `stream:key` / `stream:` -> (stream, keys); all from one stream."""
+    from .metrics import _series
+    stream, keys = None, []
+    for spec in specs:
+        s, key = _series(spec)
+        if stream is not None and s != stream:
+            sys.exit(f"keys from one stream at a time (got {stream!r} and {s!r})\n\n{usage}")
+        stream = s
+        if key:
+            keys.append(key)
+    return stream or "run", keys
+
+
 def metrics_cmd(argv):
-    """`runkit metrics [RUN_DIR] [STREAM] [selection]`: one stream's keys, as a table."""
-    from rich.table import Table
-    from .metrics import FOLDER, streams, summarize_metrics
-    usage = "usage: runkit metrics [RUN_DIR] [STREAM] [--rows A:B] [--start V] [--end V] [--x KEY]"
+    """`runkit metrics [RUN_DIR] [KEY ...] [selection] [--follow]`: a stream's
+    keys as a table, or its rows as they come."""
+    from .metrics import FOLDER, parse_rows, streams, summarize_metrics
+    usage = ("usage: runkit metrics [RUN_DIR] [KEY ...] [--follow] "
+             "[--rows A:B] [--start V] [--end V] [--x KEY]")
+    following = any(a in ("-f", "--follow") for a in argv)
+    argv = [a for a in argv if a not in ("-f", "--follow")]
     opts, argv = _options(argv, ("rows", "start", "end", "x"), usage)
-    run_dir, rest = _run_dir_and_rest(argv, usage)
-    if len(rest) > 1:
-        sys.exit(usage)
-    stream = rest[0] if rest else "run"
+    run_dir, specs = _run_dir_and_rest(argv, usage)
+    stream, keys = _stream_and_keys(specs, usage)
     have = streams(run_dir)
+
+    if following:
+        from .follow import follow
+        if opts.get("start") or opts.get("end"):
+            sys.exit(f"--follow takes --rows (which rows to show first), not --start/--end"
+                     f"\n\n{usage}")
+        try:
+            first = parse_rows(opts["rows"]) if opts.get("rows") else None
+        except ValueError as e:
+            sys.exit(str(e))
+        ui.line(f"[dim]following {FOLDER}/{stream}.jsonl of "
+                f"{ui.short_path(run_dir)} -- Ctrl-C stops following, not the run[/dim]")
+        try:
+            return follow(run_dir, stream, keys or None, first=first)
+        except KeyboardInterrupt:
+            return None
+
+    if not specs:                           # no key, no stream: all of them
+        return _metrics_overview(run_dir, have, opts)
     if stream not in have:
         sys.exit(f"no metrics stream {stream!r} in {run_dir / FOLDER} "
                  f"(streams: {', '.join(have) or 'none'})")
@@ -163,10 +200,49 @@ def metrics_cmd(argv):
         rows = summarize_metrics(run_dir, stream, **_selection(opts))
     except ValueError as e:
         sys.exit(str(e))
-    n = max((r["rows"] for r in rows), default=0)
+    if keys:
+        missing = [k for k in keys if k not in {r["key"] for r in rows}]
+        if missing:
+            sys.exit(f"no key(s) {missing} in stream {stream!r} "
+                     f"(keys: {', '.join(r['key'] for r in rows)})")
+        rows = [r for r in rows if r["key"] in keys]
     others = [s for s in have if s != stream]
-    ui.out.print(f"[bold]{run_dir.resolve().name}[/bold]  {FOLDER}/{stream}.jsonl  "
-                 f"{n} rows" + (f"  [dim](also: {', '.join(others)})[/dim]" if others else ""))
+    ui.out.print(f"[bold]{run_dir.resolve().name}[/bold]")
+    _print_stream(stream, rows, note=f"also: {', '.join(others)}" if others else None)
+    return rows
+
+
+def _metrics_overview(run_dir, have, opts):
+    """Every stream of a run, each with its keys: what `runkit metrics RUN_DIR` shows."""
+    from .metrics import FOLDER, summarize_metrics
+    ui.out.print(f"[bold]{run_dir.resolve().name}[/bold]")
+    if not have:
+        ui.out.print("[dim]no metrics yet (nothing recorded with ctx.record)[/dim]")
+        return {}
+    overview, failed = {}, {}
+    for stream in sorted(have, key=lambda s: (s != "run", s)):   # the run's own stream first
+        try:
+            overview[stream] = summarize_metrics(run_dir, stream, **_selection(opts))
+        except ValueError as e:              # e.g. a checkpoint that did not count this stream
+            failed[stream] = e
+    if failed and not overview:              # a bad selection: nothing to show at all
+        sys.exit(str(next(iter(failed.values()))))
+    for stream in sorted(have, key=lambda s: (s != "run", s)):
+        if stream in overview:
+            _print_stream(stream, overview[stream])
+        else:
+            ui.out.print(f"\n{FOLDER}/{stream}.jsonl  [dim]{failed[stream]}[/dim]")
+    return overview
+
+
+def _print_stream(stream, rows, note=None):
+    """One stream's keys as a table under a `metrics/<stream>.jsonl  N rows` line."""
+    from rich.padding import Padding
+    from rich.table import Table
+    from .metrics import FOLDER
+    n = max((r["rows"] for r in rows), default=0)
+    ui.out.print(f"\n{FOLDER}/{stream}.jsonl  {n} rows"
+                 + (f"  [dim]({note})[/dim]" if note else ""))
     table = Table(box=None, pad_edge=False, header_style="bold")
     for col, justify in (("key", "left"), ("rows", "right"), ("last", "right"),
                          ("min", "right"), ("max", "right")):
@@ -179,8 +255,7 @@ def metrics_cmd(argv):
         return f"{v:.4g}" if isinstance(v, float) else str(v)
     for r in rows:
         table.add_row(r["key"], str(r["rows"]), fmt(r["last"]), fmt(r["min"]), fmt(r["max"]))
-    ui.out.print(table)
-    return rows
+    ui.out.print(Padding(table, (0, 0, 0, 2)))
 
 
 def plot_cmd(argv):

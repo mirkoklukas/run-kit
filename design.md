@@ -740,13 +740,44 @@ run dir, so it works while a run is going, on a crashed one, and on runs copied
 off a cluster to a machine without the experiment's dependencies:
 
 ```bash
-runkit metrics runs/baseline/latest            # the `run` stream: keys, rows, last, min, max
-runkit metrics runs/baseline/latest eval       # another stream
+runkit metrics runs/baseline/latest            # every stream and its keys: rows, last, min, max
+runkit metrics runs/baseline/latest loss ret   # just these keys (of `run`)
+runkit metrics runs/baseline/latest eval:      # one stream
+runkit metrics runs/baseline/latest -f         # follow `run` as it goes (below)
+runkit metrics runs/baseline/latest eval: -f   # ... or another stream
 runkit plot runs/baseline/latest                                   # every key, a subplot each
 runkit plot runs/baseline/latest eval: --x steps                   # ... of another stream
 runkit plot runs/baseline/latest loss                              # one key, against the line number
 runkit plot runs/baseline/latest ep_return eval:ep_return --x steps
 ```
+
+Without keys, `metrics` is the overview of what a run recorded: every stream
+(`run` first), each with its keys; a run with nothing recorded says so. Keys
+narrow it, written as for `plot`: `key` for the `run` stream, `stream:key` for
+another, and a lone `stream:` for all of it — one stream per call.
+
+**Following a run.** `runkit metrics RUN_DIR [KEY ...] --follow` (`-f`) prints
+the stream's last 10 rows as a table (`--rows` picks others), then each new row
+as it is written, from any terminal or machine that sees the run dir:
+
+```
+    time        it      loss
+     1.2s         3      0.25
+     1.5s         4       0.2
+  ◆ checkpoint  checkpoints/current  at 1.5s  5 / 12  42%
+    5 rows since the last: loss 0.457  ·  it 4
+     1.8s         5     0.167
+  ✓ slow_5a35d412  ok in 3.7s  → runs/slow/latest
+```
+
+It shows the run's checkpoints as they complete — each placed after the row
+count it recorded (`checkpoint.yaml` `metrics`), so where it happened even when
+rows and a checkpoint arrive together — and stops with runkit's closing line
+when the run ends. A run left at `running` whose process is gone (on this host)
+is reported and ends the follow too. It polls once a second, reading only whole
+new lines; Ctrl-C stops following, never the run. The header comes again when
+a new key appears, and every 40 rows. (`runkit tail` stays free for following a
+run's captured output, once that exists.)
 
 RUN_DIR defaults to the current folder (`cd "$(runkit latest experiment.py)"`,
 then `runkit metrics`). Both commands can look at a stretch of the lines:

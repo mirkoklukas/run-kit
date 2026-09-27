@@ -55,23 +55,31 @@ def test_plot_refuses_what_it_cannot_draw(run_dir):
 
 
 def test_runkit_metrics_and_plot_commands(run_dir, capsys, monkeypatch):
-    rows = cli.main(["metrics", str(run_dir)])
+    overview = cli.main(["metrics", str(run_dir)])                # every stream
     out = capsys.readouterr().out
-    assert "metrics/run.jsonl" in out and "20 rows" in out and "also: eval" in out
+    assert list(overview) == ["run", "eval"]                     # the run's own stream first
+    assert "metrics/run.jsonl  20 rows" in out and "metrics/eval.jsonl  4 rows" in out
     assert "20000" in out and "e+04" not in out                  # integers stay integers
-    assert {r["key"] for r in rows} >= {"it", "steps", "loss"}
+    assert {r["key"] for r in overview["run"]} >= {"it", "steps", "loss"}
+    assert {r["key"] for r in overview["eval"]} >= {"steps", "ret"}
+    rows = cli.main(["metrics", str(run_dir), "loss"])            # a key: one stream
+    assert "also: eval" in capsys.readouterr().out and [r["key"] for r in rows] == ["loss"]
 
     png = cli.main(["plot", str(run_dir), "loss", "eval:ret", "--x", "steps"])
     assert capsys.readouterr().out.strip() == str(png) and png.is_file()
 
     monkeypatch.chdir(run_dir)                                   # RUN_DIR defaults to cwd
-    assert cli.main(["metrics", "eval"])[0]["key"] == "_time"
+    assert cli.main(["metrics", "eval:"])[0]["key"] == "_time"           # another stream
     assert cli.main(["plot", "loss", "--x=it"]).name == "loss_vs_it.png"
 
 
 def test_commands_explain_bad_input(run_dir, tmp_path, monkeypatch):
     with pytest.raises(SystemExit, match="no metrics stream 'nope'"):
+        cli.main(["metrics", str(run_dir), "nope:"])
+    with pytest.raises(SystemExit, match="no key\\(s\\) \\['nope'\\]"):
         cli.main(["metrics", str(run_dir), "nope"])
+    with pytest.raises(SystemExit, match="one stream at a time"):
+        cli.main(["metrics", str(run_dir), "loss", "eval:ret"])
     with pytest.raises(SystemExit, match="need an x key"):
         cli.main(["plot", str(run_dir), "loss", "eval:ret"])
     with pytest.raises(SystemExit, match="unknown option '--y'"):
@@ -146,7 +154,7 @@ def test_plot_and_metrics_take_the_selection(ckpt_run, capsys):
     assert png.name == "it_vs_line_start000001_end000002.png"
     tail = cli.main(["plot", str(ckpt_run), "it", "eval:ret", "--x", "steps", "--start", "-1000"])
     assert tail.name == "it__eval-ret_vs_steps_start-1000.png" and tail.is_file()
-    rows = cli.main(["metrics", str(ckpt_run), "--rows", "-5:"])
+    rows = cli.main(["metrics", str(ckpt_run), "--rows", "-5:"])["run"]
     assert {r["key"]: r for r in rows}["it"]["min"] == 25.0
     assert "5 rows" in capsys.readouterr().out
     with pytest.raises(SystemExit, match="neither a number nor a checkpoint"):
@@ -168,3 +176,135 @@ def test_plot_all_needs_numbers(run_dir):
         plot_metrics(run_dir, ["words:"])
     with pytest.raises(ValueError, match="no stream 'nope'"):
         plot_metrics(run_dir, ["nope:"])
+
+
+
+def test_metrics_with_keys(run_dir):
+    rows = cli.main(["metrics", str(run_dir), "loss", "it"])
+    assert [r["key"] for r in rows] == ["it", "loss"]                # the stream's order
+    assert [r["key"] for r in cli.main(["metrics", str(run_dir), "eval:ret"])] == ["ret"]
+
+
+# -- following ------------------------------------------------------------------
+
+import json
+import os
+import socket
+
+import yaml
+
+from runkit.follow import follow
+
+
+def _live_run(tmp_path, pid=None):
+    """A run dir as a live run leaves it: running, some rows, no end yet."""
+    d = tmp_path / "live" / "2026-09-27_10-00-00_abcdef12"
+    (d / "metrics").mkdir(parents=True)
+    (d / "run_context.yaml").write_text("id: live_abcdef12\nname: live\n")
+    _set_status(d, "running", pid=pid or os.getpid())
+    with open(d / "metrics" / "run.jsonl", "w") as f:
+        for i in range(12):
+            f.write(json.dumps({"_elapsed_s": i, "it": i, "loss": 1 / (i + 1)}) + "\n")
+    return d
+
+
+def _set_status(d, status, pid=None, checkpoint=None, **more):
+    (d / "status.yaml").write_text(yaml.safe_dump({
+        "status": status, "host": socket.gethostname(), "pid": pid or os.getpid(),
+        "checkpoint": checkpoint, "duration_s": 5.0, "error": None, **more}))
+
+
+def test_follow_prints_new_rows_checkpoints_and_the_end(tmp_path, capsys):
+    d = _live_run(tmp_path)
+    steps = []
+
+    def sleep(_):                                # each poll: the run moves on a bit
+        steps.append(1)
+        with open(d / "metrics" / "run.jsonl", "a") as f:
+            if len(steps) == 1:
+                f.write(json.dumps({"_elapsed_s": 12, "it": 12, "loss": 0.07}) + "\n")
+                f.write('{"_elapsed_s": 13, "it": 13, "lo')          # still being written
+            elif len(steps) == 2:
+                f.write('ss": 0.06}\n')
+                ck = d / "checkpoints" / "current"
+                ck.mkdir(parents=True)
+                (ck / "checkpoint.yaml").write_text(yaml.safe_dump(
+                    {"index": 1, "name": "current", "elapsed_s": 13, "info": {},
+                     "progress": 13, "total": 100, "summary": {}}))
+                _set_status(d, "running", checkpoint="checkpoints/current")
+            else:
+                _set_status(d, "ok", checkpoint="checkpoints/current")
+
+    assert follow(d, sleep=sleep) == "ok"
+    out, err = capsys.readouterr()
+    its = [int(line.split()[1]) for line in out.splitlines() if line.split()[0][0].isdigit()]
+    assert its == [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]         # the last 10, then new ones
+    assert "loss" in out.splitlines()[0]                              # a header first
+    err = "".join(err.split())
+    assert "◆checkpointcheckpoints/current" in err and "13/10013%" in err
+    assert "✓live_abcdef12okin5.0s" in err
+
+
+def test_follow_with_keys_and_a_dead_process(tmp_path, capsys):
+    d = _live_run(tmp_path, pid=2 ** 22 + 12345)                      # no such process
+    assert follow(d, keys=["loss"], sleep=lambda _: None) == "gone"
+    out, err = capsys.readouterr()
+    assert out.splitlines()[0].split() == ["time", "loss"]            # only the keys asked for
+    assert "is still `running`, but its process" in " ".join(err.split())
+
+
+def test_follow_from_the_command(tmp_path, monkeypatch, capsys):
+    d = _live_run(tmp_path)
+    _set_status(d, "failed", error="ValueError: boom")
+    assert cli.main(["metrics", str(d), "-f", "--rows", "-2:"]) == "failed"   # ends at once
+    out, err = capsys.readouterr()
+    assert [line.split()[1] for line in out.splitlines()[1:]] == ["10", "11"]
+    assert "failed" in err and "ValueError: boom" in " ".join(err.split())
+
+
+def test_follow_puts_a_checkpoint_after_the_rows_it_followed(tmp_path, capsys, monkeypatch):
+    """Rows and a checkpoint that arrive in one poll: the checkpoint's own row
+    count (checkpoint.yaml `metrics`) places its line, not the poll."""
+    from runkit import ui
+    monkeypatch.setattr(ui, "checkpoint_saved", lambda **kw: print("CHECKPOINT"))
+    d = _live_run(tmp_path)                                    # rows 0..11
+    polls = []
+
+    def sleep(_):
+        polls.append(1)
+        if len(polls) == 1:                                    # rows 12..15, checkpoint after 14
+            with open(d / "metrics" / "run.jsonl", "a") as f:
+                for i in range(12, 16):
+                    f.write(json.dumps({"_elapsed_s": i, "it": i, "loss": 0.1}) + "\n")
+            ck = d / "checkpoints" / "c"
+            ck.mkdir(parents=True)
+            (ck / "checkpoint.yaml").write_text(yaml.safe_dump(
+                {"index": 1, "name": "c", "elapsed_s": 14, "metrics": {"run": 15}}))
+            _set_status(d, "running", checkpoint="checkpoints/c")
+        else:
+            _set_status(d, "ok", checkpoint="checkpoints/c")
+
+    follow(d, sleep=sleep)
+    lines = [l.split()[1] if l.split()[0][0].isdigit() else l.strip()
+             for l in capsys.readouterr().out.splitlines()[1:]]
+    assert lines[-5:] == ["12", "13", "14", "CHECKPOINT", "15"]
+
+
+
+def test_metrics_of_a_run_without_any(tmp_path, capsys):
+    d = tmp_path / "r"
+    d.mkdir()
+    (d / "run_context.yaml").write_text("id: r_1\nname: r\n")
+    assert cli.main(["metrics", str(d)]) == {}
+    assert "no metrics yet" in capsys.readouterr().out
+
+
+
+def test_follow_another_stream(tmp_path, capsys):
+    d = _live_run(tmp_path)
+    with open(d / "metrics" / "eval.jsonl", "w") as f:
+        f.write(json.dumps({"_elapsed_s": 3, "ret": 7.5}) + "\n")
+    _set_status(d, "ok")
+    assert cli.main(["metrics", str(d), "eval:", "-f"]) == "ok"
+    out = capsys.readouterr().out.splitlines()
+    assert out[0].split() == ["time", "ret"] and out[1].split()[1] == "7.5"
