@@ -741,7 +741,7 @@ off a cluster to a machine without the experiment's dependencies. One command,
 three actions, all taking the same PATH and KEYs:
 
 ```bash
-runkit metrics [info] [PATH] [KEY ...]      # keys: rows, last, min, max, mean
+runkit metrics [info] [PATH] [KEY ...]      # keys: rows, last, min, max, mean, std, trend
 runkit metrics follow [PATH] [KEY ...]      # rows as they are written (below)
 runkit metrics plot   [PATH] [KEY ...]      # to a PNG in the run's metrics/
 ```
@@ -779,8 +779,15 @@ The split is at the first `:` — stream names have none — so a key containing
 one is written with its stream: `run:a:b`. `info` shows every stream it is
 given, `run` first, each with its keys; with nothing named, every stream, and a
 run with nothing recorded says so. `follow` takes one stream. `plot` takes keys
-from several (they then need `--x`). The `mean` is over the values a key has,
-gaps left out.
+from several (they then need `--x`). The `mean` and `std` are over the values a key has,
+gaps left out. `trend` is the mean of the later half of those values minus the
+mean of the earlier half — is the key still moving? — shown as `↑ +0.08`,
+`↓ -0.02`, or `→` when the change is under 5% of the key's typical size (none
+under 4 values). A per-row derivative of noisy metrics would be mostly noise;
+half against half is not. Over a group (`runkit metrics RUN reward/ --start
+-1000`) the table compares its terms: mean for the net contribution, std for
+how much a term varies — what steers a policy gradient, since a steady term
+mostly shifts the value estimate.
 
 **Following a run.** `runkit metrics follow [PATH] [KEY ...]` prints
 the stream's last 10 rows as a table (`--rows` picks others), then each new row

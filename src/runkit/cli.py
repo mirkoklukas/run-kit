@@ -20,7 +20,7 @@ experiment, `runkit root [FOLDER]` prints the root itself, resolved from FOLDER
 
 `metrics` reads a run's metrics without importing its experiment:
 
-    runkit metrics [info] [PATH] [KEY ...]    keys: rows, last, min, max, mean
+    runkit metrics [info] [PATH] [KEY ...]    keys: rows, last, min, max, mean, std, trend
                                               (no KEY: every stream, run first)
     runkit metrics follow [PATH] [KEY ...]    rows as they are written, the run's
                                               checkpoints, and its end
@@ -292,18 +292,40 @@ def _print_stream(stream, rows):
     ui.out.print(f"\n{FOLDER}/{stream}.jsonl  {n} rows")
     table = Table(box=None, pad_edge=False, header_style="bold")
     for col, justify in (("key", "left"), ("rows", "right"), ("last", "right"),
-                         ("min", "right"), ("max", "right"), ("mean", "right")):
+                         ("min", "right"), ("max", "right"), ("mean", "right"),
+                         ("std", "right"), ("trend", "right")):
         table.add_column(col, justify=justify)
-    def fmt(v):
-        if v is None:
-            return ""
-        if isinstance(v, float) and v.is_integer() and abs(v) < 1e15:
-            return str(int(v))                       # 60000, not 6e+04
-        return f"{v:.4g}" if isinstance(v, float) else str(v)
     for r in rows:
-        table.add_row(r["key"], str(r["rows"]), fmt(r["last"]), fmt(r["min"]),
-                      fmt(r["max"]), fmt(r["mean"]))
+        table.add_row(r["key"], str(r["rows"]), _fmt(r["last"]), _fmt(r["min"]),
+                      _fmt(r["max"]), _fmt(r["mean"]), _fmt(r["std"]), _trend_text(r))
     ui.out.print(Padding(table, (0, 0, 0, 2)))
+
+
+def _fmt(v, sign=False):
+    """One number style for the table: 60000 (not 6e+04), 17.3k, 0.02537."""
+    if v is None:
+        return ""
+    if not isinstance(v, float):
+        return str(v)
+    s = "+" if sign and v > 0 else "-" if v < 0 else ""
+    a = abs(v)
+    if a.is_integer() and a < 1e15:
+        return f"{s}{int(a)}"
+    if a >= 1e4:
+        return s + ui._num(a)
+    return f"{s}{a:.4g}"
+
+
+def _trend_text(r):
+    """↑ +0.08 / ↓ -0.02 / → 0.001: flat when the change is under 5% of the
+    key's typical size, so noise does not read as a trend."""
+    trend = r.get("trend")
+    if trend is None:
+        return ""
+    scale = max(abs(r["min"]), abs(r["max"])) if r["mean"] is None else \
+        max(abs(r["mean"]), r["std"] or 0.0, 1e-12)
+    arrow = "→" if abs(trend) < 0.05 * scale else ("↑" if trend > 0 else "↓")
+    return f"{arrow} {_fmt(float(trend), sign=True)}"
 
 
 def _metrics_follow(run_dir, series, opts, usage):

@@ -30,8 +30,10 @@ def run_dir(tmp_path):
 
 def test_summary(run_dir):
     by_key = {r["key"]: r for r in summarize_metrics(run_dir)}
-    assert by_key["it"] == {"key": "it", "rows": 20, "last": 19.0, "min": 0.0, "mean": 9.5,
-                            "max": 19.0}
+    it = by_key["it"]
+    assert {k: it[k] for k in ("rows", "last", "min", "max", "mean")} == {
+        "rows": 20, "last": 19.0, "min": 0.0, "max": 19.0, "mean": 9.5}
+    assert it["std"] == pytest.approx(5.766, abs=1e-3)            # population std of 0..19
     assert by_key["_time"]["min"] is None and by_key["_time"]["rows"] == 20
     assert {r["key"]: r["rows"] for r in summarize_metrics(run_dir, "eval")}["ret"] == 4
 
@@ -375,3 +377,28 @@ def test_info_shows_several_streams_and_plot_mixes_them(run_dir, capsys):
     assert [r["key"] for r in tables["eval"]] == ["ret"]
     png = cli.main(["metrics", "plot", str(run_dir), "loss", "eval:", "ret", "--x", "steps"])
     assert png.name == "loss__eval-ret_vs_steps.png"
+
+
+def test_trend_is_later_half_minus_earlier_half(tmp_path, capsys):
+    exp = Experiment("tr")
+
+    @exp.run
+    def run(cfg: Cfg, ctx: RunContext):
+        for i in range(8):
+            ctx.record(up=float(i), flat=5.0 + 0.01 * (i % 2), down=10.0 - i,
+                       rare=1.0 if i < 3 else None)
+
+    d = exp.main([f"--root={tmp_path}"]).context.dir
+    by = {r["key"]: r for r in summarize_metrics(d)}
+    assert by["up"]["trend"] == pytest.approx(4.0)             # (4+5+6+7)/4 - (0+1+2+3)/4
+    assert by["down"]["trend"] == pytest.approx(-4.0)
+    assert abs(by["flat"]["trend"]) < 0.01
+    assert by["rare"]["trend"] is None                         # 3 values: too few
+    assert by["up"]["std"] == pytest.approx(2.2913, abs=1e-4)
+
+    capsys.readouterr()
+    cli.main(["metrics", str(d)])
+    rows = {line.split()[0]: line for line in capsys.readouterr().out.splitlines()
+            if line.strip() and line.split()[0] in ("up", "down", "flat", "rare")}
+    assert rows["up"].rstrip().endswith("↑ +4") and rows["down"].rstrip().endswith("↓ -4")
+    assert "→" in rows["flat"] and "↑" not in rows["rare"] and "→" not in rows["rare"]

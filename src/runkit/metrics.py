@@ -199,7 +199,8 @@ def streams(run_dir):
 
 def summarize_metrics(run_dir, stream="run", *, rows=None, x=None, start=None, end=None):
     """Per key of one stream: how many lines have it, and its last / min / max /
-    mean over the values it has (numeric keys only; None otherwise). What `runkit metrics` prints. `x`,
+    mean / std over the values it has, and its trend: the mean of the later half
+    of those values minus the mean of the earlier half (None under 4 values) (numeric keys only; None otherwise). What `runkit metrics` prints. `x`,
     `start`, `end` as for `compile_metrics`; then `rows`, a slice of the lines
     (`"-1000:"`)."""
     m = _select(run_dir, stream, _columns(load_metrics(run_dir, stream)),
@@ -214,12 +215,24 @@ def summarize_metrics(run_dir, stream="run", *, rows=None, x=None, start=None, e
                         "last": vals[-1].item() if len(vals) else None,
                         "min": vals.min().item() if len(vals) else None,
                         "mean": vals.mean().item() if len(vals) else None,
-                        "max": vals.max().item() if len(vals) else None})
+                        "max": vals.max().item() if len(vals) else None,
+                        "std": vals.std().item() if len(vals) else None,
+                        "trend": _trend(vals)})
         else:
             present = [v for v in col if v is not None]
             out.append({"key": k, "rows": len(present), "last": present[-1] if present else None,
-                        "min": None, "mean": None, "max": None})
+                        "min": None, "mean": None, "max": None, "std": None,
+                        "trend": None})
     return out
+
+
+def _trend(vals):
+    """Later half's mean minus earlier half's: is it still moving? (A per-row
+    derivative of noisy metrics is mostly noise; half against half is not.)"""
+    if len(vals) < 4:
+        return None
+    half = len(vals) // 2
+    return (vals[-half:].mean() - vals[:half].mean()).item()
 
 
 def _series(spec):
