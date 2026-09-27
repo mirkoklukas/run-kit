@@ -5,19 +5,29 @@ warnings, status -- so it never lands on stdout where an experiment may be writi
 data; and `out` (stdout) for output the user explicitly asked to see, i.e. a
 command whose whole point is the text it prints.
 
-`run_started` is the panel runkit prints itself. The rest is a small
-vocabulary of line helpers (`line`, `title`, `ok`, `warn`, `done`, ...) for ad-hoc
-output, all left-padded by `PADDING_LEFT` so they line up.
+`run_started` / `run_finished` bracket a run; `opened` heads an eval / viz.
+The rest is a small vocabulary of line helpers (`line`, `title`, `ok`, `warn`,
+`done`, ...) for ad-hoc output, all left-padded by `PADDING_LEFT` so they line up.
+
+Everything written to `err` first flushes stdout. When stdout is not a terminal
+(piped, a log file) python buffers it while stderr goes out at once, so without
+the flush a body's prints can land after runkit's closing line in the log.
+Paths are shown short (`short_path`): relative to the current folder when below
+it, else under `~`, else absolute.
 """
+import os
+import pathlib
+import sys
+
 import yaml
 from rich.console import Console, Group
 from rich.live import Live
 from rich.markup import escape
 from rich.padding import Padding
-from rich.panel import Panel
 from rich.spinner import Spinner
 from rich.syntax import Syntax
 from rich.table import Table
+from rich.text import Text
 
 err = Console(stderr=True)
 out = Console()
@@ -34,8 +44,34 @@ def silence() -> None:
 
 # ── line vocabulary (stderr) ─────────────────────────────────────────────────
 
+def _flush_stdout():
+    """Let what the experiment printed so far out first, so the log keeps the
+    order things happened in."""
+    try:
+        sys.stdout.flush()
+    except Exception:                                        # noqa: BLE001
+        pass
+
+
+def short_path(p):
+    """A path as short as it can be shown unambiguously: relative to the current
+    folder when it is below it, else `~/...` when under home, else absolute."""
+    p = pathlib.Path(p)
+    try:
+        rel = os.path.relpath(p)
+        if not rel.startswith(".."):
+            return rel
+    except ValueError:                       # another drive (windows)
+        pass
+    try:
+        return "~/" + str(p.relative_to(pathlib.Path.home()))
+    except ValueError:
+        return str(p)
+
+
 def line(text: str = "", *, pad: int = PADDING_LEFT, highlight: bool = False) -> None:
     """One left-padded line (the base the helpers below build on)."""
+    _flush_stdout()
     err.print(Padding(text, (0, pad), expand=False), highlight=highlight)
 
 
@@ -92,7 +128,7 @@ def _kv(rows):
     grid.add_column(justify="right", style="cyan", no_wrap=True)
     grid.add_column(overflow="fold")
     for label, value in rows:
-        grid.add_row(label, str(value))
+        grid.add_row(label, value if not isinstance(value, str) else escape(value))
     return grid
 
 
@@ -104,26 +140,44 @@ def _cfg_block(cfg):
 
 def opened(*, name, verb, run_dir):
     """One line when eval/viz opens an existing run: which, and for what."""
-    line(f"[bold green]▶ runkit · {name} · {verb}[/bold green]  [dim]{run_dir}[/dim]")
+    line(f"[bold green]▶ runkit · {name} · {verb}[/bold green]  "
+         f"[dim]{escape(short_path(run_dir))}[/dim]")
 
 
-def run_started(*, name, run_id, run_dir, tag, changes, n_fields):
-    """Print the start banner: which run, where it writes, what it changes.
+def _launch_text(launch):
+    """meta.yaml's `launch` as one short line: how the process was started."""
+    parts = []
+    if launch.get("project"):
+        parts.append("uv")
+    if launch.get("extras"):
+        parts.append("extras " + ", ".join(launch["extras"]))
+    if launch.get("vars"):
+        parts.append("vars " + ", ".join(launch["vars"]))
+    return " · ".join(parts)
+
+
+def run_started(*, name, run_id, run_dir, tag, changes, n_fields, launch=None):
+    """Print the start banner: which run, where it writes, how it was launched,
+    what it changes -- a title line, then a label / value block, no frame.
 
     Only the config fields that differ from the dataclass defaults are shown
     (`changes`, dotted keys) -- a large config would otherwise fill the screen,
     and the whole of it is in `{run_dir}/config.yaml` anyway.
     """
-    rows = [("id", run_id), *([("tag", tag)] if tag else []), ("dir", run_dir)]
     rest = n_fields - len(changes)
     if not changes:
-        cfg_part = [f"[dim]config: all {n_fields} fields at their defaults[/dim]"]
+        config = Text(f"all {n_fields} fields at their defaults", style="dim")
     else:
         note = f"{rest} more at their defaults · " if rest else ""
-        cfg_part = [_cfg_block(changes), f"[dim]{note}all in config.yaml[/dim]"]
-    body = Group(_kv(rows), "", *cfg_part)
-    err.print(Panel(body, title=f"▶ runkit · {name}", title_align="left",
-                    border_style="green", expand=False))
+        config = Group(_cfg_block(changes), f"[dim]{note}all in config.yaml[/dim]")
+    rows = [("id", run_id), *([("tag", tag)] if tag else []),
+            ("dir", short_path(run_dir)),
+            *([("launch", _launch_text(launch))] if launch else []),
+            ("config", config)]
+    _flush_stdout()
+    err.print(Padding(Group(f"[bold green]▶ runkit · {escape(name)}[/bold green]",
+                            Padding(_kv(rows), (0, 0, 0, 2))),
+                      (0, PADDING_LEFT), expand=False))
 
 
 def _duration(seconds):
@@ -138,7 +192,7 @@ def _duration(seconds):
 
 def run_finished(*, run_id, status, duration_s, error, run_dir):
     """One line at the end of a run: how it went, how long, where it is."""
-    dur, where = _duration(duration_s), escape(str(run_dir))
+    dur, where = _duration(duration_s), escape(short_path(run_dir))
     if status == "ok":
         ok(f"{run_id}  [green]ok[/green] in {dur}  [dim]→ {where}[/dim]")
     elif status == "interrupted":

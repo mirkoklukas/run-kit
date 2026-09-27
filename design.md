@@ -395,21 +395,30 @@ runkit's own output goes to stderr, so stdout is the experiment's: `2>/dev/null`
 leaves only what the body prints. A run is bracketed by two things:
 
 ```
-╭─ ▶ runkit · baseline ─────────────────────────────────╮
-│  id  baseline_a3f9c1e7                                │
-│ tag  abl-a                                            │
-│ dir  runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a │
-│                                                       │
-│ lr: 0.0001                                            │
-│ 2 more at their defaults · all in config.yaml         │
-╰───────────────────────────────────────────────────────╯
-  ...whatever the body prints...
+  ▶ runkit · baseline
+        id  baseline_a3f9c1e7
+       tag  abl-a
+       dir  runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a
+    launch  uv · extras mjx, sb3 · vars XLA_PYTHON_CLIENT_PREALLOCATE
+    config  lr: 0.0001
+            2 more at their defaults · all in config.yaml
+...whatever the body prints...
   ✓ baseline_a3f9c1e7  ok in 3m 12s  → runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a
 ```
 
-The banner shows only the config fields that differ from the dataclass defaults
-(as dotted keys, `optim.lr`), since a large config would fill the screen and the
-whole of it is in `config.yaml`. A field without a default always shows.
+The banner is a title line and a label / value block, no frame. It shows only
+the config fields that differ from the dataclass defaults (as dotted keys,
+`optim.lr`), since a large config would fill the screen and the whole of it is
+in `config.yaml`; a field without a default always shows. `launch` is how the
+process was started from `experiment.toml` (see "Starting the process") — the
+row is there only when the toml set something, relaunch or vars alone.
+
+Paths are shown short: relative to the current folder when the run dir is
+below it, else under `~`, else absolute. And before runkit prints anything it
+flushes stdout: when stdout is not a terminal (piped, a log file, a cluster
+job's output) python buffers what the body prints while stderr goes out at
+once, so without the flush a body's last lines could land below the closing
+line — the log would no longer show the order things happened in.
 
 The closing line is how the run went, how long it took and where it is — so
 the end of a long run answers that without scrolling back. For a failed run it

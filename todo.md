@@ -47,6 +47,6 @@
 - [ ] **bad `experiment.toml` during a run** — a toml syntax error gives a clean
   message from `runkit root`, but a python traceback from a run (the ValueError
   from `settings.resolve_root` is not caught in the run wrapper / dispatcher).
-- [ ] **relative paths in the banner and closing line** — both print absolute run
-  dir paths, which wrap in narrow terminals; show them relative to cwd when
-  that is shorter.
+- [ ] **progress in the terminal** — runkit prints nothing while a run goes; a
+  checkpoint saved, or `ctx.progress` (3.2M / 10M), could show as an occasional
+  line. The body prints what it wants today, so it may not be needed.

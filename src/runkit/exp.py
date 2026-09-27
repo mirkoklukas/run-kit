@@ -286,7 +286,7 @@ def _announce(name, cfg, ctx, tag):
     """
     changes, n_fields = config_changes(cfg)
     ui.run_started(name=name, run_id=ctx.id, run_dir=ctx.dir, tag=tag,
-                   changes=changes, n_fields=n_fields)
+                   changes=changes, n_fields=n_fields, launch=_launch())
 
 
 def _report(ctx, status, duration_s, error):
