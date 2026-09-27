@@ -51,6 +51,7 @@ class _Live:
     total: object = None               # ... and the total, sticky
     checkpoint: str | None = None      # the latest complete checkpoint, relative to the run dir
     written: float | None = None       # monotonic time progress was last written
+    records: dict = dataclasses.field(default_factory=dict)   # lines appended per metrics stream
 
 
 @dataclasses.dataclass

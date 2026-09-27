@@ -38,6 +38,7 @@ class Checkpoint:
     dir: pathlib.Path         # {run dir}/checkpoints/<name>/ (a staging folder during the block)
     index: int                # runkit's counter: the order of checkpoints, whatever their names
     info: dict = dataclasses.field(default_factory=dict)   # yours; saved to checkpoint.yaml
+    metrics: dict = dataclasses.field(default_factory=dict)  # lines per metrics stream when it completed
 
 
 class _Saving:
@@ -74,10 +75,14 @@ class _Saving:
             "elapsed_s": round(time.monotonic() - ctx._live.t0, 3),
             "run": ctx.id,
             "info": plain(ckpt.info),
+            # rows each metrics stream had when this checkpoint completed: an exact
+            # boundary for "the metrics between two checkpoints"
+            "metrics": dict(ctx._live.records),
         }
         (staging / RECORD).write_text(yaml.safe_dump(record, sort_keys=False))
         _swap_in(staging, self.final)
         ctx._live.checkpoints = ckpt.index
+        ckpt.metrics = dict(ctx._live.records)
         ckpt.dir = self.final
         point_latest(self.final)
         # status.yaml names it at once (not throttled like progress): what a
@@ -122,7 +127,8 @@ def load_checkpoints(run_dir):
         try:
             rec = yaml.safe_load((d / RECORD).read_text())
             found.append(Checkpoint(name=rec["name"], dir=d.resolve(), index=rec["index"],
-                                    info=rec.get("info") or {}))
+                                    info=rec.get("info") or {},
+                                    metrics=rec.get("metrics") or {}))
         except Exception:                                    # noqa: BLE001
             continue
     return sorted(found, key=lambda c: c.index)

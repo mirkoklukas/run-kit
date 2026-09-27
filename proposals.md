@@ -24,7 +24,7 @@ Checkpoints are built (see design.md, "Checkpoints"). Still open:
 and metrics"). Still open:
 
 - `record` from `eval` appends to the same stream every time eval runs; each
-  line has its `time`, but a re-run of eval is not otherwise marked.
+  line has its `_time`, but a re-run of eval is not otherwise marked.
 - Showing progress: `runkit ls` (not built), or the closing line of a failed
   run ("failed at 3.2M / 10M").
 

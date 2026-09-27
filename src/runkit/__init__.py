@@ -13,10 +13,10 @@ Two disjoint namespaces: config (the "what") via `key=value`; staging (the
 from .exp import Experiment, experiment, Run, RunContext, init_run
 from .runs import load_run, select_run
 from .checkpoints import Checkpoint, load_checkpoints
-from .metrics import load_metrics
+from .metrics import compile_metrics, load_metrics, plot_metrics
 from .autocli import main
 from .config import random_seed
 
 __all__ = ["Experiment", "experiment", "Run", "RunContext", "init_run",
            "load_run", "select_run", "Checkpoint", "load_checkpoints",
-           "load_metrics", "random_seed", "main"]
+           "load_metrics", "compile_metrics", "plot_metrics", "random_seed", "main"]

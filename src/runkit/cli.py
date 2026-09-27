@@ -3,6 +3,8 @@
 Usage:
     runkit <verb> [runkit options] <experiment> [args ...]
     runkit root [FOLDER]
+    runkit metrics [RUN_DIR] [STREAM] [--rows A:B] [--start V] [--end V] [--x KEY]
+    runkit plot [RUN_DIR] KEY [KEY ...] [--x KEY] [--rows A:B] [--start V] [--end V] [--out FILE]
 
 verbs: run, eval, viz (as registered on the experiment), root, latest
 
@@ -16,6 +18,19 @@ the experiment's runs folder ({root}/{name}) and its latest run dir. Without an
 experiment, `runkit root [FOLDER]` prints the root itself, resolved from FOLDER
 (default: the current one): the nearest `experiment.toml`'s `[env] root`, else
 `./runs`.
+
+`metrics` and `plot` read a run dir's metrics without importing its experiment
+(RUN_DIR defaults to the current folder; `runs/<name>/latest` works).
+`metrics` prints one stream's keys with their rows, last, min and max. `plot`
+draws keys to a PNG in the run's metrics/ folder: KEY is `key` (the `run`
+stream) or `stream:key`; `--x KEY` plots against a key of each series' own
+stream, else against the line number.
+
+Both select lines with `--rows A:B` (a python slice of line numbers, negatives
+from the end: `--rows -1000:`) and `--start V` / `--end V` (an inclusive window
+on the x axis: a value, negative counting back from the end -- `--start -1000` is
+the last 1000 lines, or with `--x steps` the last 1000 steps -- or a checkpoint
+name, for the lines between checkpoints).
 """
 import importlib
 import importlib.util
@@ -43,6 +58,8 @@ def main(argv=None):
         print(f"runkit — lightweight, reproducible experiment runs.\n\n{HELP}")
         return
     verb, rest = argv[0], argv[1:]
+    if verb in ("metrics", "plot"):          # read a run dir; no experiment import
+        return (metrics_cmd if verb == "metrics" else plot_cmd)(rest)
     if verb not in VERBS + PATH_VERBS:
         hint = ""
         if verb.endswith(".py") or "." in verb:      # the old order: runkit exp.py viz
@@ -84,6 +101,100 @@ def root_cmd(argv):
         ui.warn(f"{root} does not exist yet (no runs made there)")
     print(root)
     return root
+
+
+def _run_dir_and_rest(argv, usage):
+    """Split off a leading RUN_DIR (an existing folder), else the current one."""
+    if any(a in ("-h", "--help") for a in argv):
+        print(usage)
+        sys.exit(0)
+    if argv and pathlib.Path(argv[0]).is_dir():
+        run_dir, rest = pathlib.Path(argv[0]), argv[1:]
+    else:
+        run_dir, rest = pathlib.Path.cwd(), list(argv)
+    if not (run_dir / "run_context.yaml").is_file():
+        sys.exit(f"{run_dir} is not a run dir (no run_context.yaml); pass one, "
+                 f"e.g. runs/<name>/latest\n\n{usage}")
+    return run_dir, rest
+
+
+def _options(argv, allowed, usage):
+    """Split `--name value` / `--name=value` options (from `allowed`) off argv.
+    A value may start with '-' (`--start -1000`)."""
+    opts, positional, it = {}, [], iter(argv)
+    for a in it:
+        if a.startswith("--") and a not in ("--help",):
+            name, eq, value = a[2:].partition("=")
+            if name not in allowed:
+                sys.exit(f"unknown option {a!r}\n\n{usage}")
+            opts[name] = value if eq else next(it, None)
+            if opts[name] is None:
+                sys.exit(f"--{name} needs a value\n\n{usage}")
+        else:
+            positional.append(a)
+    return opts, positional
+
+
+def _selection(opts):
+    """--rows / --start / --end / --x -> keyword arguments for runkit.metrics
+    (named as in python: `from` is a keyword there)."""
+    return {"rows": opts.get("rows"), "start": opts.get("start"), "end": opts.get("end"),
+            "x": opts.get("x")}
+
+
+def metrics_cmd(argv):
+    """`runkit metrics [RUN_DIR] [STREAM] [selection]`: one stream's keys, as a table."""
+    from rich.table import Table
+    from .metrics import FOLDER, streams, summarize_metrics
+    usage = "usage: runkit metrics [RUN_DIR] [STREAM] [--rows A:B] [--start V] [--end V] [--x KEY]"
+    opts, argv = _options(argv, ("rows", "start", "end", "x"), usage)
+    run_dir, rest = _run_dir_and_rest(argv, usage)
+    if len(rest) > 1:
+        sys.exit(usage)
+    stream = rest[0] if rest else "run"
+    have = streams(run_dir)
+    if stream not in have:
+        sys.exit(f"no metrics stream {stream!r} in {run_dir / FOLDER} "
+                 f"(streams: {', '.join(have) or 'none'})")
+    try:
+        rows = summarize_metrics(run_dir, stream, **_selection(opts))
+    except ValueError as e:
+        sys.exit(str(e))
+    n = max((r["rows"] for r in rows), default=0)
+    others = [s for s in have if s != stream]
+    ui.out.print(f"[bold]{run_dir.resolve().name}[/bold]  {FOLDER}/{stream}.jsonl  "
+                 f"{n} rows" + (f"  [dim](also: {', '.join(others)})[/dim]" if others else ""))
+    table = Table(box=None, pad_edge=False, header_style="bold")
+    for col, justify in (("key", "left"), ("rows", "right"), ("last", "right"),
+                         ("min", "right"), ("max", "right")):
+        table.add_column(col, justify=justify)
+    def fmt(v):
+        if v is None:
+            return ""
+        if isinstance(v, float) and v.is_integer() and abs(v) < 1e15:
+            return str(int(v))                       # 60000, not 6e+04
+        return f"{v:.4g}" if isinstance(v, float) else str(v)
+    for r in rows:
+        table.add_row(r["key"], str(r["rows"]), fmt(r["last"]), fmt(r["min"]), fmt(r["max"]))
+    ui.out.print(table)
+    return rows
+
+
+def plot_cmd(argv):
+    """`runkit plot [RUN_DIR] KEY [KEY ...] [--x KEY] [selection] [--out FILE]`: to a PNG."""
+    from .metrics import plot_metrics
+    usage = ("usage: runkit plot [RUN_DIR] KEY [KEY ...] [--x KEY] "
+             "[--rows A:B] [--start V] [--end V] [--out FILE]")
+    opts, positional = _options(argv, ("x", "out", "rows", "start", "end"), usage)
+    run_dir, ys = _run_dir_and_rest(positional, usage)
+    sel = _selection(opts)
+    try:
+        out = plot_metrics(run_dir, ys, x=sel["x"], out=opts.get("out"), rows=sel["rows"],
+                           start=sel["start"], end=sel["end"])
+    except ValueError as e:
+        sys.exit(str(e))
+    print(out)
+    return out
 
 
 def _import(target):

@@ -474,6 +474,7 @@ class Checkpoint:
     dir: Path        # {run dir}/checkpoints/<name>/
     index: int       # runkit's counter: the order of checkpoints, whatever their names
     info: dict       # yours; saved to checkpoint.yaml when the block exits
+    metrics: dict    # lines each metrics stream had when it completed (runkit's)
 ```
 
 `ctx.checkpoint(name=None)` is the only way to make one. The name is free-form —
@@ -501,6 +502,7 @@ time: '2026-09-25T13:47:40'       # when it finished writing
 elapsed_s: 13529.4                # since the run started
 run: test_policy_a3f9c1e7         # which run it came from, if the folder travels
 info: {ep_return: 20.7}           # ckpt.info (numpy values made plain)
+metrics: {run: 781, eval: 78}     # lines per metrics stream at this point
 ```
 
 Checkpoints sit at the top level, not under `out/`: runkit owns the structure —
@@ -529,6 +531,10 @@ and runkit never touches them.
   (not throttled like progress) and kept in the final write, so a failed run
   says what it can be resumed from: `run_dir / status["checkpoint"]`. Only the
   path: index, time and info stay in that checkpoint's own `checkpoint.yaml`.
+- **It marks its place in the metrics**: `metrics:` counts the lines each
+  stream had when the checkpoint completed — runkit wrote both, so it knows —
+  which makes "the metrics between two checkpoints" exact, with no clock
+  involved (see `--start` / `--end` under "Looking at them").
 - **Reading back** works on any context: `ctx.checkpoints()`, or
   `load_checkpoints(run_dir)`, gives the complete ones as `Checkpoint`s, oldest
   first — for an `eval` to pick one, or a run to resume from.
@@ -558,11 +564,11 @@ fine, and the run's final `status.yaml` keeps the last values — a failed run
 shows how far it got.
 
 **`ctx.record(stream=None, /, **values)`** appends one line to
-`metrics/<stream>.jsonl`, with `time` and `elapsed_s` added by runkit:
+`metrics/<stream>.jsonl`, with `_time` and `_elapsed_s` added by runkit:
 
 ```
 # metrics/run.jsonl
-{"time": "2026-09-26T13:47:40.112", "elapsed_s": 13529.4, "it": 781, "steps": 3200000, "ep_return": 20.7}
+{"_time": "2026-09-26T13:47:40.112", "_elapsed_s": 13529.4, "it": 781, "steps": 3200000, "ep_return": 20.7}
 ```
 
 - **Named `record`**, not `log`: "log" is the run's captured stdout (planned)
@@ -570,17 +576,45 @@ shows how far it got.
 - **A folder of streams**, runkit-owned, next to `checkpoints/` and `out/`. The
   run records to `run`; anything else names its stream — `eval` records with
   `ctx.record("eval", ...)` to `metrics/eval.jsonl`, so its numbers never mix
-  into the training series. `elapsed_s` there counts from when eval opened the
+  into the training series. `_elapsed_s` there counts from when eval opened the
   run.
 - **The stream is positional-only** (`/`), so a metric that happens to be called
-  `stream` is just a value. `time` and `elapsed_s` are runkit's and refused as
-  keys.
+  `stream` is just a value.
+- **Keys starting with `_` are runkit's**: `_time` (wall clock, ms) and
+  `_elapsed_s` are added to every row, and `ctx.record` refuses any `_` key. So
+  plain names — `time` for simulated time, say — stay free for the experiment,
+  the origin of a key is visible at a glance, and runkit can add keys later
+  without colliding with anything recorded. (W&B marks its automatic fields the
+  same way: `_step`, `_runtime`, `_timestamp`.)
 - **JSON Lines**: calls may carry different keys (CSV needs fixed columns), an
   append is crash-safe (a killed run loses at most its last, torn line, which
-  the reader skips), and it reads back with `load_metrics(run_dir, "run")` or
-  `pandas.read_json(path, lines=True)`. numpy values are written as plain ones.
+  the reader skips), and it reads back without pandas (below). numpy values
+  are written as plain ones.
 - **No step argument**: the experiment's x axis (`it`, `steps`, `epoch`) is just
   another key.
+- **Reading back**, as rows or as columns. `load_metrics(run_dir, "run")` gives
+  the lines as dicts. `compile_metrics(run_dir, "run")` gives `{key: array}`,
+  every array as long as the stream:
+
+  ```python
+  m = compile_metrics(run_dir)
+  m["loss"][-1000:]                            # the last 1000 entries
+  m["loss"][m["steps"] > 3e6]                  # a condition on another column
+  plt.plot(m["_line"], m["loss"])              # against the line number
+  plt.plot(m["_elapsed_s"], m["ep_return"])    # against time
+  pandas.DataFrame(m)                          # if you have pandas
+  ```
+
+  Because the columns line up, the same slice or mask selects the same lines in
+  each — a plain dict is enough, and stays familiar (`keys()`, `items()`, adding
+  a column). A line without a key leaves a gap, so a sparse key (an eval every
+  tenth iteration) stays aligned: numeric columns are float arrays with NaN for
+  gaps, anything else (`_time`, strings, booleans) an object array with None —
+  arrays too, so any slice or mask works on every column. `_line` is added on
+  reading, not stored: each line's number in the file, so it stays right
+  through any slicing. `start=` / `end=` select what slicing cannot — checkpoint
+  boundaries, and a window counted back from the end of an x key (see "Looking
+  at them").
 - **Separate from progress**: progress is one current position, overwritten;
   metrics are the whole history, appended. `record` does not move progress.
 
@@ -598,6 +632,54 @@ running run:
 Why standardize metrics at all: they are the one output a generic tool can read
 without knowing the experiment — comparing a sweep, or "final return per run"
 in a future `runkit ls` — where otherwise each experiment writes its own format.
+
+**Looking at them** needs no code, and no import of the experiment — just the
+run dir, so it works while a run is going, on a crashed one, and on runs copied
+off a cluster to a machine without the experiment's dependencies:
+
+```bash
+runkit metrics runs/baseline/latest            # the `run` stream: keys, rows, last, min, max
+runkit metrics runs/baseline/latest eval       # another stream
+runkit plot runs/baseline/latest loss                              # against the line number
+runkit plot runs/baseline/latest ep_return eval:ep_return --x steps
+```
+
+RUN_DIR defaults to the current folder (`cd "$(runkit latest experiment.py)"`,
+then `runkit metrics`). Both commands can look at a stretch of the lines:
+
+```bash
+runkit plot runs/x/latest loss --rows -1000:              # the last 1000 lines
+runkit plot runs/x/latest loss --start -1000              # the same, as a window
+runkit plot runs/x/latest loss --x steps --start -1000000 # the last million steps
+runkit plot runs/x/latest loss --start 000002 --end best  # between two checkpoints
+runkit metrics runs/x/latest --start best                 # summary since "best"
+```
+
+- `--rows A:B` is a python slice of line numbers (end exclusive, negatives
+  from the end).
+- The flags are named as the python arguments (`start=`, `end=`): `from` is a
+  keyword in python, and `stop` would suggest a slice's exclusive end, where
+  this window includes it.
+- `--start` / `--end` are an inclusive window on the x axis — the line number, or
+  `--x`. A value counts back from the end when negative (from the largest x
+  across the plotted series, so several streams share one window). A checkpoint
+  name is an exact boundary, from its `metrics:` counts; a name wins over a
+  number that reads the same (`000003`). A stream the checkpoint did not count
+  (written later, by another process) asks for a value instead.
+- Rows are counted per stream, so `--rows` on several streams covers different
+  stretches of each (runkit warns); a window on a shared `--x` lines them up.
+- The PNG's name records the selection, so different windows do not overwrite
+  each other. From python: `compile_metrics(run_dir, start="best")["loss"][-1000:]`,
+  `plot_metrics(..., rows="-1000:", start="best", end="last")`.
+
+`plot` takes keys as `key` (the `run` stream) or `stream:key`. With `--x KEY`,
+each series is drawn against that key *from its own stream*, so streams need not
+line up: training and eval returns land on one `steps` axis. Without it, the x axis is the line number, which only means the
+same thing within one stream — series from several streams need `--x`. The PNG
+goes to the run's `metrics/`, named by the arguments
+(`ep_return__eval-ep_return_vs_steps.png`), so the same plot redrawn overwrites
+itself. The same from python: `plot_metrics(run_dir, ["loss"], x="steps")`, e.g.
+in a viz. matplotlib is a dependency, imported only when something is plotted.
 
 ### What you get back
 

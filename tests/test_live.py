@@ -105,7 +105,7 @@ def test_record_appends_rows_to_the_run_stream(tmp_path):
     rows = load_metrics(r.context.dir)
     assert [row["it"] for row in rows] == [0, 1, 2, 3]
     assert rows[0]["loss"] == 1.0 and rows[3]["val"] == 0.5 and rows[3]["stream"] == "as-a-value"
-    assert all(row["time"] and row["elapsed_s"] >= 0 for row in rows)
+    assert all(row["_time"] and row["_elapsed_s"] >= 0 for row in rows)
     assert (r.context.dir / "metrics" / "run.jsonl").is_file()
 
 
@@ -128,14 +128,17 @@ def test_eval_records_to_a_named_stream_only(tmp_path):
     exp.main([f"--root={tmp_path}"])
     d = exp.main(["eval", f"--root={tmp_path}"])
     assert [r["ret"] for r in load_metrics(d, "eval")] == [1.5]
-    assert load_metrics(d, "eval")[0]["elapsed_s"] >= 0        # since eval opened the run
+    assert load_metrics(d, "eval")[0]["_elapsed_s"] >= 0       # since eval opened the run
     assert [r["it"] for r in load_metrics(d)] == [0]            # the run's stream untouched
 
 
 def test_record_refuses_runkits_keys_and_bad_stream_names(tmp_path):
     def body(cfg: Cfg, ctx: RunContext):
-        with pytest.raises(ValueError, match="added by runkit"):
-            ctx.record(time=1)
+        with pytest.raises(ValueError, match="keys starting with '_' are runkit's"):
+            ctx.record(_time=1)
+        with pytest.raises(ValueError, match="runkit's"):
+            ctx.record(_anything=1)
+        ctx.record(time=1.5, elapsed_s=2)                        # plain names are yours
         for bad in ("", ".hidden", "a/b"):
             with pytest.raises(ValueError, match="bad metrics stream"):
                 ctx.record(bad, x=1)
@@ -163,3 +166,32 @@ def test_only_a_live_run_reports_progress(tmp_path):
         r.context.progress(1)
     with pytest.raises(RuntimeError, match="name a stream"):
         r.context.record(x=1)
+
+
+def test_compile_metrics_gives_aligned_columns(tmp_path):
+    from runkit import compile_metrics
+
+    def body(cfg: Cfg, ctx: RunContext):
+        for i in range(4):
+            if i == 2:
+                ctx.record(it=i, loss=1.0 / (i + 1), eval_return=12.0, note="eval")
+            else:
+                ctx.record(it=i, loss=1.0 / (i + 1))
+        ctx.record(done=True)                                    # a bool: not numeric
+
+    r = _run(body, tmp_path)
+    m = compile_metrics(r.context.dir)                           # {key: array}
+    assert list(m) == ["_line", "_time", "_elapsed_s", "it", "loss", "eval_return",
+                       "note", "done"]
+    assert list(m["_line"]) == [0, 1, 2, 3, 4]                   # added on reading, not stored
+    assert all(len(v) == 5 for v in m.values())                  # one entry per line
+    assert m["it"].dtype == float and list(m["it"][:4]) == [0, 1, 2, 3]
+    assert np.isnan(m["it"][4])                                  # the last line has no "it"
+    ev = m["eval_return"]
+    assert ev[2] == 12.0 and np.isnan(ev[[0, 1, 3, 4]]).all()     # sparse, but aligned
+    assert m["note"].tolist() == [None, None, "eval", None, None]  # non-numeric: object
+    assert m["done"].tolist() == [None, None, None, None, True]
+    assert m["_time"].dtype == object and m["_elapsed_s"].dtype == float
+    later = m["it"] >= 2                                         # a mask from one column ...
+    assert m["eval_return"][later][0] == 12.0 and m["note"][later][0] == "eval"  # ... any other
+    assert compile_metrics(r.context.dir, "nope") == {}
