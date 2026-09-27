@@ -70,19 +70,30 @@ def follow(run_dir, stream="run", keys=None, *, first=None, poll=POLL_S, sleep=t
 
 
 class _Table:
-    """Rows as aligned columns: `_elapsed_s` as the first, then the keys."""
+    """Rows as aligned columns: `_elapsed_s` as the first, then the keys.
+
+    `keys` may name groups (`reward/`): the group's keys become columns as they
+    appear in the rows, so a term first recorded later still shows up. No
+    keys: every key but runkit's `_` ones, as they appear.
+    """
 
     def __init__(self, keys):
-        self.fixed = list(keys) if keys else None
-        self.keys = list(keys) if keys else []
+        self.wanted = list(keys) if keys else None
+        self.keys = [k for k in keys if not k.endswith("/")] if keys else []
         self.since_header = None
+        self.warned = False
+
+    def _wants(self, key):
+        if self.wanted is None:
+            return not key.startswith("_")
+        return key in self.wanted or any(key.startswith(g) for g in self.wanted
+                                         if g.endswith("/"))
 
     def row(self, row):
-        if self.fixed is None:
-            new = [k for k in row if not k.startswith("_") and k not in self.keys]
-            if new:
-                self.keys += new
-                self.since_header = None          # a new column: the header again
+        new = [k for k in row if k not in self.keys and self._wants(k)]
+        if new:
+            self.keys += new
+            self.since_header = None              # a new column: the header again
         if self.since_header is None or self.since_header >= HEADER_EVERY:
             self._print(["time", *self.keys], header=True)
             self.since_header = 0
@@ -95,9 +106,12 @@ class _Table:
     def _print(self, cells, header=False):
         widths = [max(8, len(k)) for k in ["time", *self.keys]]
         text = "  ".join(str(c).rjust(w) for c, w in zip(cells, widths))
-        text = text[:max(ui.out.width - 2, 20)]
+        if header and len(text) > ui.out.width and not self.warned:
+            self.warned = True               # never cut: the terminal wraps; say how to narrow
+            ui.line(f"[dim]{len(self.keys)} columns are wider than the terminal; name "
+                    f"keys to narrow it, e.g. `runkit metrics follow RUN loss reward/`[/dim]")
         ui.out.print(f"[bold]{text}[/bold]" if header else text, markup=header,
-                     highlight=False, soft_wrap=True)
+                     highlight=False, soft_wrap=True, crop=False)
 
 
 def _read_from(path, offset):

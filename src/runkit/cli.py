@@ -29,7 +29,7 @@ experiment, `runkit root [FOLDER]` prints the root itself, resolved from FOLDER
 
 PATH is a run dir, its metrics/ folder, or a stream file (metrics/eval.jsonl);
 default the current folder. KEY is `key` (of the current stream: `run`, or the
-file's), `stream:key`, `loss/` (every loss/... key), or a lone `stream:` that
+file's), `stream:key`, `loss/` or 'loss/*' (every loss/... key), or a lone `stream:` that
 switches the stream for the keys after it -- or, with none after it, means all
 of it: `eval: ret len`, `loss eval: ret`, `eval:`.
 
@@ -186,7 +186,8 @@ def parse_keys(specs, stream=None):
     `key` is a key of the current stream -- `run`, or the stream a file PATH
     names; `stream:key` a key of that stream, leaving the current one as it is;
     a lone `stream:` switches the current stream for the keys that follow it,
-    and when none follow, means all of it. `loss/` (a group) is kept as given.
+    and when none follow, means all of it. `loss/` (a group -- every `loss/...`
+    key; `loss/*` means the same) is kept as given.
     The split is at the first `:` -- stream names have none -- so a key
     containing one is written with its stream: `run:a:b` is key `a:b`.
     """
@@ -195,6 +196,8 @@ def parse_keys(specs, stream=None):
         s, sep, key = tok.partition(":")
         if not sep:
             key = tok
+        if key.endswith("/*"):                # `reward/*` is `reward/` (quote it in a shell)
+            key = key[:-1]
         if sep and not key:                  # `eval:` -- switch
             if open_switch:
                 out.append((open_switch, ""))
@@ -289,24 +292,30 @@ def _metrics_info(run_dir, series, opts, usage):
 
 def _print_stream(stream, rows):
     """One stream's keys as a table under a `metrics/<stream>.jsonl  N rows` line."""
-    from rich.padding import Padding
-    from rich.table import Table
+    from rich.markup import escape
     from .metrics import FOLDER
     n = max((r["rows"] for r in rows), default=0)
     ui.out.print(f"\n{FOLDER}/{stream}.jsonl  {n} rows")
-    table = Table(box=None, pad_edge=False, header_style="bold")
-    for col, justify in (("key", "left"), ("rows", "right"), ("last", "right"),
-                         ("min", "right"), ("max", "right"), ("mean", "right"),
-                         ("std", "right"), ("trend", "right")):
-        table.add_column(col, justify=justify)
-    for r in rows:
-        table.add_row(r["key"], str(r["rows"]), _fmt(r["last"]), _fmt(r["min"]),
-                      _fmt(r["max"]), _fmt(r["mean"]), _fmt(r["std"]), _trend_text(r))
-    ui.out.print(Padding(table, (0, 0, 0, 2)))
+    names = ("key", "rows", "last", "min", "max", "mean", "std", "trend")
+    cells = [[r["key"], str(r["rows"]), _fmt(r["last"]), _fmt(r["min"]), _fmt(r["max"]),
+              _fmt(r["mean"]), _fmt(r["std"]), _trend_text(r)] for r in rows]
+    # laid out by hand, every column as wide as its widest cell, and printed
+    # uncropped: a key or a value is never cut -- a table wider than the
+    # terminal wraps there instead
+    widths = [max([len(n), *(len(c[i]) for c in cells)]) for i, n in enumerate(names)]
+    def line(values):
+        return "  " + "  ".join(v.ljust(w) if i == 0 else v.rjust(w)
+                                for i, (v, w) in enumerate(zip(values, widths))).rstrip()
+    ui.out.print(f"[bold]{escape(line(names))}[/bold]", crop=False, soft_wrap=True,
+                 highlight=False)
+    for c in cells:
+        ui.out.print(line(c), markup=False, crop=False, soft_wrap=True, highlight=False)
 
 
 def _fmt(v, sign=False):
-    """One number style for the table: 60000 (not 6e+04), 17.3k, 0.02537."""
+    """One number style for the table: whole numbers in full (60000, not
+    6e+04), others of 10000 or more to the unit (12346), smaller ones to 4
+    significant digits (0.4123, -0.0001234)."""
     if v is None:
         return ""
     if not isinstance(v, float):
@@ -315,8 +324,8 @@ def _fmt(v, sign=False):
     a = abs(v)
     if a.is_integer() and a < 1e15:
         return f"{s}{int(a)}"
-    if a >= 1e4:
-        return s + ui._num(a)
+    if 1e4 <= a < 1e15:
+        return f"{s}{round(a)}"
     return f"{s}{a:.4g}"
 
 
@@ -358,9 +367,21 @@ def _metrics_follow(run_dir, series, opts, usage):
     if len(wanted) > 1:
         sys.exit(f"follow takes one stream (got {', '.join(wanted)})\n\n{usage}")
     (stream, keys), = wanted.items()
-    keys = _stream_keys(run_dir, stream, keys, usage) if (run_dir / FOLDER /
-                                                          f"{stream}.jsonl").is_file() else \
-        [k for k in keys if k] or None
+    if "" in keys:
+        keys = None                          # all of the stream
+    elif (run_dir / FOLDER / f"{stream}.jsonl").is_file():
+        # a named key must exist; a group (`reward/`) may still be empty -- its
+        # keys become columns as they are recorded -- but only while the run goes
+        _stream_keys(run_dir, stream, [k for k in keys if not k.endswith("/")], usage)
+        from .follow import _status
+        from .metrics import _columns, load_metrics
+        have = [k for k in _columns(load_metrics(run_dir, stream)) if k != "_line"]
+        empty = [g for g in keys if g.endswith("/") and not any(h.startswith(g) for h in have)]
+        if empty and _status(run_dir).get("status") != "running":
+            sys.exit(f"no keys {', '.join(g + '...' for g in empty)} in stream {stream!r} "
+                     f"(keys: {', '.join(have) or 'none'})\n\n{usage}")
+        for g in empty:
+            ui.line(f"[dim]no {g}... keys yet in {stream!r} -- waiting for them[/dim]")
     try:
         first = parse_rows(opts["rows"]) if opts.get("rows") else None
     except ValueError as e:

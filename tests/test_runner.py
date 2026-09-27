@@ -444,3 +444,12 @@ def test_random_seed_is_drawn_per_config_and_recorded(tmp_path):
     assert _yaml(r.context.dir, "config.yaml")["seed"] == r.retval       # the drawn one
     assert build_cfg(Seeded, _yaml(r.context.dir, "config.yaml")).seed == r.retval  # kept on thaw
     assert main(seeded, ["seed=7", f"--root={tmp_path}"]).retval == 7    # override skips it
+
+
+def test_a_flag_that_takes_a_value_needs_one(tmp_path):
+    """`--tag env.x=1`: the tag must not silently become True."""
+    with pytest.raises(SystemExit, match="--tag needs a value"):
+        main(run, ["--tag", "seed=3", f"--root={tmp_path}"])
+    assert not list(tmp_path.glob("*/*"))                      # nothing was started
+    r = main(run, ["--tag", "t1", "seed=3", f"--root={tmp_path}"])
+    assert r.context.dir.name.endswith("_t1") and r.config.seed == 3

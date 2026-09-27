@@ -216,6 +216,10 @@ as `1e3`.
 
 The accepted flags are not a hardcoded list — they are the keyword arguments the
 decorated function takes, so anything else is rejected before the run starts.
+Arguments may come in any order after the experiment; a flag's value is written
+`--tag=gait` or `--tag gait`. A flag that takes a value but gets none is refused
+(`--tag needs a value`) — so `--tag env.x=1`, where the next token is config,
+cannot quietly make the tag `True`.
 `name` is not among them: it is the experiment's identity, set once in the
 decorator, with no command-line override.
 

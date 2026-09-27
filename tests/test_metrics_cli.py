@@ -421,3 +421,58 @@ def test_sort(tmp_path):
     assert order("--sort", "std")[-1] in ("_time", "note")               # no number: last
     with pytest.raises(SystemExit, match="--sort takes one of"):
         cli.main(["metrics", str(d), "--sort", "nope"])
+
+
+def test_info_never_cuts_a_key_or_a_value(tmp_path, capsys):
+    long = "reward/" + "a_very_long_term_name_" * 5                   # wider than any terminal
+    exp = Experiment("wide")
+
+    @exp.run
+    def run(cfg: Cfg, ctx: RunContext):
+        for i in range(4):
+            ctx.record(**{long: -0.00012345, "big": 12345.678 + i})
+
+    d = exp.main([f"--root={tmp_path}"]).context.dir
+    capsys.readouterr()
+    cli.main(["metrics", str(d)])
+    out = capsys.readouterr().out
+    assert long in out and "…" not in out
+    assert "-0.0001234" in out and "12346" in out and "12.3k" not in out   # rounded, not cut
+
+
+def test_follow_groups_pick_up_keys_recorded_later(tmp_path, capsys):
+    d = _live_run(tmp_path)                                    # it, loss; no reward/ yet
+    polls = []
+
+    def sleep(_):
+        polls.append(1)
+        with open(d / "metrics" / "run.jsonl", "a") as f:
+            f.write(json.dumps({"_elapsed_s": 20, "it": 20, "reward/lin": 0.4}) + "\n")
+            if len(polls) == 2:
+                f.write(json.dumps({"_elapsed_s": 21, "it": 21, "reward/lin": 0.5,
+                                    "reward/yaw": 0.1}) + "\n")
+                _set_status(d, "ok")
+
+    assert follow(d, keys=["reward/"], sleep=sleep) == "ok"
+    headers = [l.split() for l in capsys.readouterr().out.splitlines()
+               if l.split() and l.split()[0] == "time"]
+    assert headers[0] == ["time"] and headers[-1] == ["time", "reward/lin", "reward/yaw"]
+
+
+def test_follow_an_empty_group(tmp_path, capsys, monkeypatch):
+    d = _live_run(tmp_path)
+    _set_status(d, "ok")                                       # finished: say so, and stop
+    with pytest.raises(SystemExit, match=r"no keys rewards/\.\.\. in stream 'run'"):
+        cli.main(["metrics", "follow", str(d), "rewards/"])
+
+    _set_status(d, "running")                                  # live: note it, and follow
+    import runkit.follow as fw
+    monkeypatch.setattr(fw, "follow", lambda *a, **kw: "followed")
+    capsys.readouterr()
+    assert cli.main(["metrics", "follow", str(d), "reward/"]) == "followed"
+    assert "no reward/... keys yet" in " ".join(capsys.readouterr().err.split())
+
+
+def test_star_is_the_same_as_the_group():
+    assert cli.parse_keys(["reward/*"]) == [("run", "reward/")]
+    assert cli.parse_keys(["eval:", "reward/*"]) == [("eval", "reward/")]

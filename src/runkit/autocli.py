@@ -161,11 +161,18 @@ def _config_file(flag_value, positionals):
 
 
 def _check_flags(fn, flags):
-    """Reject any --flag the wrapper doesn't accept (the staging kwargs)."""
+    """Reject any --flag the wrapper doesn't accept (the staging kwargs), and a
+    flag that takes a value given without one: `--tag env.x=1` would otherwise
+    make the tag `True` (a bare flag) and the `env.x=1` config."""
     allowed = _staging_flags(fn)
     bad = [k for k in flags if k not in allowed]
     if bad:
         raise ValueError(f"unknown flag(s): {sorted(bad)}; allowed: {sorted(allowed)}")
+    params = inspect.signature(fn, follow_wrapped=False).parameters
+    for k, v in flags.items():
+        if v is True and not isinstance(params[k].default, bool):
+            raise ValueError(f"--{k.replace('_', '-')} needs a value: "
+                             f"--{k.replace('_', '-')}=VALUE")
 
 
 def _staging_flags(fn):
