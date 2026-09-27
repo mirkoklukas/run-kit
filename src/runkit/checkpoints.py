@@ -25,6 +25,7 @@ import time
 
 import yaml
 
+from .metrics import summarize_window
 from .utils import plain, point_latest
 
 FOLDER = "checkpoints"
@@ -39,6 +40,7 @@ class Checkpoint:
     index: int                # runkit's counter: the order of checkpoints, whatever their names
     info: dict = dataclasses.field(default_factory=dict)   # yours; saved to checkpoint.yaml
     metrics: dict = dataclasses.field(default_factory=dict)  # lines per metrics stream when it completed
+    summary: dict = dataclasses.field(default_factory=dict)  # per stream: the rows since the last one
 
 
 class _Saving:
@@ -78,17 +80,30 @@ class _Saving:
             # rows each metrics stream had when this checkpoint completed: an exact
             # boundary for "the metrics between two checkpoints"
             "metrics": dict(ctx._live.records),
+            # where the run was, and how it went since the last checkpoint
+            "progress": ctx._live.progress,
+            "total": ctx._live.total,
+            "summary": {"run": s} if (s := summarize_window(ctx._live.window)) else {},
         }
         (staging / RECORD).write_text(yaml.safe_dump(record, sort_keys=False))
         _swap_in(staging, self.final)
         ctx._live.checkpoints = ckpt.index
+        ctx._live.window = {}                 # the next checkpoint summarizes from here
         ckpt.metrics = dict(ctx._live.records)
+        ckpt.summary = record["summary"]
         ckpt.dir = self.final
         point_latest(self.final)
         # status.yaml names it at once (not throttled like progress): what a
         # resume or an eval of an unfinished run would read
         ctx._live.checkpoint = f"{FOLDER}/{ckpt.name}"
         ctx._write_running()
+        try:                                  # say so; best-effort, never costs the checkpoint
+            from . import ui
+            ui.checkpoint_saved(path=ctx._live.checkpoint, elapsed_s=record["elapsed_s"],
+                                info=record["info"], progress=record["progress"],
+                                total=record["total"], summary=record["summary"].get("run"))
+        except Exception:                                    # noqa: BLE001
+            pass
         return False
 
 
@@ -128,7 +143,8 @@ def load_checkpoints(run_dir):
             rec = yaml.safe_load((d / RECORD).read_text())
             found.append(Checkpoint(name=rec["name"], dir=d.resolve(), index=rec["index"],
                                     info=rec.get("info") or {},
-                                    metrics=rec.get("metrics") or {}))
+                                    metrics=rec.get("metrics") or {},
+                                    summary=rec.get("summary") or {}))
         except Exception:                                    # noqa: BLE001
             continue
     return sorted(found, key=lambda c: c.index)

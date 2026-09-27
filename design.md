@@ -403,6 +403,8 @@ leaves only what the body prints. A run is bracketed by two things:
     config  lr: 0.0001
             2 more at their defaults · all in config.yaml
 ...whatever the body prints...
+  ◆ checkpoint  checkpoints/best  at 2m 40s  64k / 100k  64%  ep_return=20.7
+    20 rows since the last: ep_return 18.4  loss 0.021  ·  it 260  steps 64k
   ✓ baseline_a3f9c1e7  ok in 3m 12s  → runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a
 ```
 
@@ -425,6 +427,13 @@ the end of a long run answers that without scrolling back. For a failed run it
 is `✗ ... failed after 2.1s (ValueError: bad shape) → .../traceback.txt`,
 printed just before python's own traceback; an interrupted one says so. Like the
 status writes, it is best-effort and never replaces the experiment's exception.
+
+Each checkpoint prints two lines once it is complete (see "Checkpoints"): its
+folder relative to the run dir, how far into the run, the progress and its
+`info`; then the `run` metrics since the last checkpoint — means, and counters
+by their last value. That is runkit's whole report while a run goes: the
+experiment decides the cadence by when it checkpoints, and nothing is printed
+per `record` or per `progress`. A save that fails prints nothing.
 
 `eval` and `viz` print one header line, `▶ runkit · baseline · viz <run dir>`,
 and then whatever their body prints.
@@ -546,6 +555,7 @@ class Checkpoint:
     index: int       # runkit's counter: the order of checkpoints, whatever their names
     info: dict       # yours; saved to checkpoint.yaml when the block exits
     metrics: dict    # lines each metrics stream had when it completed (runkit's)
+    summary: dict    # per stream: the rows since the last checkpoint (runkit's)
 ```
 
 `ctx.checkpoint(name=None)` is the only way to make one. The name is free-form —
@@ -574,6 +584,10 @@ elapsed_s: 13529.4                # since the run started
 run: test_policy_a3f9c1e7         # which run it came from, if the folder travels
 info: {ep_return: 20.7}           # ckpt.info (numpy values made plain)
 metrics: {run: 781, eval: 78}     # lines per metrics stream at this point
+progress: 3200000                 # ctx.progress at this point
+total: 10000000
+summary:                          # the `run` rows since the last checkpoint
+  run: {rows: 20, mean: {ep_return: 18.4, loss: 0.021}, last: {it: 260, steps: 2660000}}
 ```
 
 Checkpoints sit at the top level, not under `out/`: runkit owns the structure —
@@ -606,6 +620,23 @@ and runkit never touches them.
   stream had when the checkpoint completed — runkit wrote both, so it knows —
   which makes "the metrics between two checkpoints" exact, with no clock
   involved (see `--start` / `--end` under "Looking at them").
+- **It summarizes the metrics since the last one.** runkit keeps a running sum
+  per key of the `run` stream as `ctx.record` is called, and at each checkpoint
+  stores `summary: {run: {rows, mean, last}}`, then starts over. Counters —
+  integer-valued and strictly increasing, like `it` or `steps` — are given by
+  their last value; everything else by its mean over the values it had (a key
+  missing from a row, `None` or NaN is not counted), so a float that improves
+  every row is still averaged. runkit's own `_` keys are left out. So every
+  checkpoint records how training was going when it was saved, without
+  re-reading the metrics — useful for choosing which one to evaluate. Other
+  streams can join later; the summary is keyed by stream for that.
+- **It says so in the terminal**, once complete — where it is, how far the run
+  got, and the summary:
+
+  ```
+    ◆ checkpoint  checkpoints/current  at 1h 12m  2.66M / 10M  27%  ep_return=20.7
+      20 rows since the last: ep_return 18.4  loss 0.021  ·  it 260  steps 2.66M
+  ```
 - **Reading back** works on any context: `ctx.checkpoints()`, or
   `load_checkpoints(run_dir)`, gives the complete ones as `Checkpoint`s, oldest
   first — for an `eval` to pick one, or a run to resume from.

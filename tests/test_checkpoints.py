@@ -177,3 +177,56 @@ def test_status_names_the_latest_checkpoint_by_its_path(tmp_path):
                 for d in (tmp_path / "ck").glob("2*")]
     st = next(s for s in statuses if s["status"] == "failed")
     assert st["checkpoint"] == "checkpoints/best"
+
+
+def test_a_complete_checkpoint_says_so(tmp_path, capsys):
+    def body(cfg: Cfg, ctx: RunContext):
+        with ctx.checkpoint():
+            pass
+        with ctx.checkpoint("best") as ckpt:
+            ckpt.info.update(ep_return=np.float32(20.7123), it=5)
+        try:
+            with ctx.checkpoint("broken"):
+                raise OSError("disk full")
+        except OSError:
+            pass
+
+    _go(_exp(body), tmp_path)
+    err = "".join(capsys.readouterr().err.split())             # lines may wrap
+    assert "◆checkpointcheckpoints/000001at" in err
+    assert "◆checkpointcheckpoints/bestat" in err and "ep_return=20.7it=5" in err
+    assert "checkpoints/broken" not in err                     # a failed save says nothing
+
+
+
+def test_a_checkpoint_summarizes_the_rows_since_the_last_one(tmp_path, capsys):
+    def body(cfg: Cfg, ctx: RunContext):
+        ctx.progress(total=100)
+        for i in range(4):                                    # rows 0..3
+            ctx.record(it=i, steps=(i + 1) * 10, loss=[4.0, 2.0, 3.0, 1.0][i],
+                       ret=None if i == 1 else float(i), note="text")
+        ctx.progress(40)
+        with ctx.checkpoint("a"):
+            pass
+        ctx.record(it=4, steps=50, loss=0.5)                   # one row
+        with ctx.checkpoint("b"):
+            pass
+        with ctx.checkpoint("c"):                              # nothing since "b"
+            pass
+
+    r = _go(_exp(body), tmp_path)
+    ck = {c.name: c for c in r.context.checkpoints()}
+    a = ck["a"].summary["run"]
+    assert a["rows"] == 4
+    assert a["mean"] == {"loss": 2.5, "ret": (0 + 2 + 3) / 3}  # None not counted; a
+                                                               # rising float is averaged
+    assert a["last"] == {"it": 3, "steps": 40}                 # counters: their last value
+    assert ck["b"].summary["run"] == {"rows": 1, "mean": {"loss": 0.5},
+                                      "last": {"it": 4, "steps": 50}}
+    assert ck["c"].summary == {}                               # no rows since "b"
+    rec = _record(r.context.dir / "checkpoints" / "a")
+    assert (rec["progress"], rec["total"]) == (40, 100) and rec["summary"]["run"]["rows"] == 4
+
+    err = "".join(capsys.readouterr().err.split())
+    assert "checkpoints/aat" in err and "40/10040%" in err
+    assert "4rowssincethelast:loss2.5ret1.67·it3steps40" in err

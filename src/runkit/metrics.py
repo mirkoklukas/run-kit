@@ -48,6 +48,8 @@ def append(ctx, stream, values):
         f.write(json.dumps(row) + "\n")
     if ctx._live is not None:               # counted for checkpoint.yaml
         ctx._live.records[stream] = ctx._live.records.get(stream, 0) + 1
+        if stream == "run":                 # summarized at the next checkpoint
+            _add_to_window(ctx._live.window, row)
 
 
 def load_metrics(run_dir, stream="run"):
@@ -312,3 +314,38 @@ def _numeric(cols, key, stream):
 
 def _safe(name):
     return "".join(c if c.isalnum() or c in "-_." else "-" for c in name)[:150]
+
+
+# -- the summary a checkpoint gives of the rows since the one before -----------
+
+def _add_to_window(window, row):
+    """Running per-key state for the rows since the last checkpoint: a sum and
+    count over the key's numeric values (None / NaN / missing are not counted),
+    its last value, and whether it is a counter so far -- integers, strictly
+    increasing (`it`, `steps`). A float metric is never a counter, however it
+    moves: a return that improves every row is still averaged."""
+    window["_rows"] = window.get("_rows", 0) + 1
+    for k, v in row.items():
+        if k.startswith("_") or not _is_number(v) or v != v:      # runkit's keys; None; NaN
+            continue
+        s = window.get(k)
+        if s is None:
+            window[k] = {"sum": float(v), "n": 1, "last": v, "counter": isinstance(v, int)}
+        else:
+            s["counter"] = s["counter"] and isinstance(v, int) and v > s["last"]
+            s["sum"] += v
+            s["n"] += 1
+            s["last"] = v
+
+
+def summarize_window(window):
+    """{"rows", "mean", "last"} of a window: counters (`it`, `steps`) by their
+    last value, the rest by their mean over the values they had. None if nothing
+    was recorded."""
+    rows = window.get("_rows", 0)
+    if not rows:
+        return None
+    keys = {k: s for k, s in window.items() if k != "_rows"}
+    return {"rows": rows,
+            "mean": {k: s["sum"] / s["n"] for k, s in keys.items() if not s["counter"]},
+            "last": {k: s["last"] for k, s in keys.items() if s["counter"]}}

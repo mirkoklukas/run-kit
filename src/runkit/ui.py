@@ -190,6 +190,50 @@ def _duration(seconds):
     return f"{h}h {m:02d}m"
 
 
+def checkpoint_saved(*, path, elapsed_s, info, progress=None, total=None, summary=None):
+    """Two lines when a checkpoint is complete: its folder (relative to the run
+    dir), how far into the run, the progress and its info; then the `run`
+    metrics since the last checkpoint -- means, and counters by their last
+    value. Each shortened if long."""
+    text = f"[cyan]◆[/cyan] checkpoint  {escape(path)}  [dim]at {_duration(elapsed_s)}"
+    if progress is not None or total:
+        text += "  " + escape(_progress_text(progress or 0, total))
+    if info:
+        text += "  " + escape(_clip("  ".join(f"{k}={_num(v)}" for k, v in info.items())))
+    line(text + "[/dim]")
+    if summary:
+        means = "  ".join(f"{k} {_num(v)}" for k, v in summary["mean"].items())
+        lasts = "  ".join(f"{k} {_num(v)}" for k, v in summary["last"].items())
+        rows = summary["rows"]
+        body = "  ·  ".join(p for p in (means, lasts) if p)
+        line(f"[dim]  {rows} row{'s' if rows != 1 else ''} since the last: "
+             f"{escape(_clip(body, 100))}[/dim]")
+
+
+def _progress_text(progress, total):
+    if not total:
+        return f"progress {_num(progress)}"
+    return f"{_num(progress)} / {_num(total)}  {100 * progress / total:.0f}%"
+
+
+def _num(v):
+    """A number, short: 2.66M, 12.3k, 0.0213, 260."""
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return str(v)
+    a = abs(v)
+    if a >= 1e6:
+        return f"{v / 1e6:.3g}M"
+    if a >= 1e4:
+        return f"{v / 1e3:.3g}k"
+    if float(v).is_integer():
+        return str(int(v))
+    return f"{v:.3g}"
+
+
+def _clip(text, n=80):
+    return text if len(text) <= n else text[:n - 3] + "..."
+
+
 def run_finished(*, run_id, status, duration_s, error, run_dir):
     """One line at the end of a run: how it went, how long, where it is."""
     dur, where = _duration(duration_s), escape(short_path(run_dir))

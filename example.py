@@ -28,10 +28,10 @@ def run(cfg: Config, ctx: RunContext):
     for i in range(3):
         loss = 1.0 / (i + 1)
         ctx.record(part=i, loss=loss)                     # metrics/run.jsonl
-        with ctx.checkpoint() as ckpt:                    # checkpoints/000001/, ...
+        ctx.progress(i + 1)
+        with ctx.checkpoint() as ckpt:                    # checkpoints/000001/, ... and a line
             (ckpt.dir / "state.txt").write_text(f"seed={cfg.seed} part={i}")
             ckpt.info["loss"] = loss
-        ctx.progress(i + 1)
     return {"seed": cfg.seed, "final_loss": 1.0 / (cfg.steps + 1)}   # -> {run dir}/retval.json
 
 
