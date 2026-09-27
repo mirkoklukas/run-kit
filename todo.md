@@ -33,6 +33,11 @@
   (`PolicyModelCfg(ModelCfg)` with `pad_cells: int = 1`) can go back to a plain
   `default_factory`.
 
+- [x] **experiment.toml extras and vars** — `runkit <verb> <experiment>` reads
+  them before the import and relaunches under `uv run --project <dir> --extra ...`
+  once; vars alone are set in-process; `meta.yaml` records `launch`. Open: the
+  `project` key, a check under `python -m` (proposals.md).
+
 ## soft
 
 - [ ] **path schemes: where they apply** — `exp:` / `cwd:` / `SCHEME:` prefixes

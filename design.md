@@ -127,8 +127,8 @@ The differences follow from what each namespace is about:
   what the run *was*. Staging mostly is not: the root is where the run dir sits,
   the tag goes in `meta.yaml`.
 - **When it is read.** The toml is read before the experiment is imported, so it
-  can set up the process (extras, env vars — see `proposals.md`); the config is
-  needed only once the dataclass exists.
+  can set up the process (extras, env vars — see "Starting the process"); the
+  config is needed only once the dataclass exists.
 
 Which is also the rule for what belongs in `experiment.toml`: what is true of
 *every* attempt from that folder (root, extras, env vars). Per-attempt staging
@@ -242,8 +242,54 @@ root = "../../runs/policy"      # this experiment only
 Precedence: `--root` > `[env.<stem>]` > `[env]` > `./runs`. A path is relative
 to the folder holding `experiment.toml`, or uses a scheme prefix (`ctk:` →
 `$RUNKIT_PATH_CTK`, `exp:` → that same folder). `eval` and `viz` resolve it the
-same way, so they look where the run wrote. `root` is the only key read so far;
-the rest of the file is in `proposals.md`.
+same way, so they look where the run wrote.
+
+### Starting the process: `extras` and `vars`
+
+The same file says how to start the process an experiment needs:
+
+```toml
+# lab/rl_env/experiment.toml
+[env]
+extras = ["mjx"]                                     # uv extras
+vars = { XLA_PYTHON_CLIENT_PREALLOCATE = false }     # environment variables
+
+[env.test_policy]
+extras = ["mjx", "sb3"]                              # lists replace: the full set
+vars = { MUJOCO_GL = "egl" }                         # tables merge, this one winning per key
+```
+
+Extras have to be in place *before* the experiment is imported — without them,
+the import is what fails — so they cannot come from the experiment itself (a
+decorator is read only after the import). `runkit <verb> <experiment> ...`
+reads them first, finding the experiment's file on disk without importing it
+(`lab.rl_env.test_policy` → `lab/rl_env/test_policy.py`), and re-executes itself
+as
+
+```bash
+uv run --project <dir> --extra mjx --extra sb3 python -m runkit <verb> <experiment> ...
+```
+
+with `vars` in the environment, once — a guard variable stops the relaunched
+process from relaunching again. `<dir>` is the nearest `pyproject.toml` at or
+above the experiment, so it works from any folder, without `cd`. `python -m
+runkit` rather than `runkit`, so it does not depend on the console script being
+installed in that environment. With `vars` but no `extras`, no relaunch is
+needed: they are set in runkit's own environment before the import.
+
+What the process was started with is recorded in `meta.yaml`:
+
+```yaml
+launch:
+  extras: [mjx, sb3]
+  vars: {XLA_PYTHON_CLIENT_PREALLOCATE: 'false', MUJOCO_GL: egl}
+  project: /abs/path/to/control-kit
+```
+
+`vars` values become strings (a boolean as `true` / `false`). An unknown key
+warns; an experiment file named like an `[env]` key (`vars.py`) cannot have an
+override and is refused. `python experiment.py` cannot change its own
+environment, so it runs as it is and records `launch: null`.
 
 ```bash
 runkit root                              # the root, resolved from the current folder
@@ -364,7 +410,7 @@ and then whatever their body prints.
 runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a/
 ├── config.yaml        the resolved config -- what it ran with
 ├── run_context.yaml   id + name -- what it ran as
-├── meta.yaml          tag, script, module -- how the attempt was staged
+├── meta.yaml          tag, script, module, launch -- how the attempt was staged
 ├── status.yaml        running | ok | failed | interrupted; who, how far, how long
 ├── traceback.txt      only if the run raised
 ├── retval.json        the return value, if there was one (.npy for an array)

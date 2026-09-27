@@ -238,6 +238,18 @@ def _resolve_dir(root, name, tag, hex8):
     return pathlib.Path(root).resolve() / name / "_".join(parts)
 
 
+def _launch():
+    """What runkit set up for this process from experiment.toml (extras, vars,
+    uv project), or None -- e.g. a plain `python experiment.py`."""
+    import json
+    from .launch import LAUNCH
+    raw = os.environ.get(LAUNCH)
+    try:
+        return json.loads(raw) if raw else None
+    except ValueError:
+        return None
+
+
 def init_run(cfg, *, name, tag, root, script=None, module=None):
     """Create the run dir, freeze the run into it, return a RunContext.
 
@@ -261,7 +273,7 @@ def init_run(cfg, *, name, tag, root, script=None, module=None):
     _dump_yaml(run_dir / "run_context.yaml", {"id": uid, "name": name})
     _dump_yaml(run_dir / "meta.yaml",
                {"tag": tag, "script": str(script) if script else None,
-                "module": module})
+                "module": module, "launch": _launch()})
     point_latest(run_dir)                    # {root}/{name}/latest: the latest *started* run
     return ctx
 

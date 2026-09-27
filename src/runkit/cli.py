@@ -81,6 +81,8 @@ def main(argv=None):
     if not rest:
         sys.exit(f"usage: runkit {verb} <experiment> ...")
     target, args = rest[0], rest[1:]
+    from .launch import prepare
+    prepare(target, argv)                   # experiment.toml's extras / vars, before the import
     return dispatch(_find_experiment(_import(target), target), [verb, *args])
 
 

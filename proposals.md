@@ -84,77 +84,24 @@ The verbs themselves are built (`python experiment.py [run|eval|viz] ...`, and
 - **Role-less commands** (`bench` above) stay in the module's own `__main__` for
   now. Revisit if several appear, e.g. with a registered `@exp.command`.
 
-### `experiment.toml`: how to start the process
+### `experiment.toml`: what is left
 
-Extras have to be known **before** the module is imported — without them the
-import is what fails. So they cannot live only on a decorator: reading
-`run._runkit_extras` needs the import that the extras are required for. Parsing
-the source for a literal `extras=[...]` would work, but is brittle.
+`root`, `extras` and `vars`, and the relaunch under uv, are built (see
+design.md, "Where runs go" and "Starting the process"). Still open:
 
-Instead, each experiment folder may carry an `experiment.toml`, read with
-`tomllib` before anything is imported:
-
-```toml
-# lab/rl_env/experiment.toml
-[env]
-extras = ["mjx"]
-root = "ctk:runs"
-
-[env.test_policy]
-extras = ["mjx", "sb3"]
-```
-
-The split follows the order of events:
-
-| when | where | owns |
-| ---- | ----- | ---- |
-| before import | `experiment.toml` | how to start the process: extras, env vars, project, root |
-| after import | decorators | what a function is: name, config type, role, run-dir behavior |
-
-Rules:
-
-- **Discovery.** runkit walks up from the target module to the nearest
-  `experiment.toml`, the way tools find `pyproject.toml`. No file means today's
-  behavior.
-- **Per-module overrides.** `[env]` holds the folder's defaults; `[env.<module>]`
-  (keyed by the module's file stem) is applied on top for that module. Lists
-  *replace* (the override states the full set, readable in one place); tables
-  such as `vars` *merge*, the override winning per key. A module named like one of
-  the `[env]` keys (`extras`, `vars`, ...) is rejected with a clear error.
-- **Keys:**
-  - `extras` — uv extras to launch with.
-  - `vars` — environment variables for the process (e.g. the JAX flags that
-    today live as copy-paste prefixes in READMEs).
-  - `root` — where run dirs go. *(Built — see design.md, "Where runs go".)*
-  - `project` — the uv project to launch in (see below).
-- **Paths** in the toml are relative to the folder containing `experiment.toml`
-  (`"../../runs"`), or use runkit's existing scheme prefixes, which already
-  resolve through environment variables: `"ctk:runs"` resolves against
-  `$RUNKIT_PATH_CTK`, `exp:` against the experiment's folder. No `${VAR}`
-  interpolation for now; add it when a case needs more than a base path, and then
-  fail loudly on an unset variable (`os.path.expandvars` leaves it in silently).
-
-### Launching
-
-`runkit <verb> <module>` resolves the toml, then re-executes itself as
-
-```bash
-uv run [--project <dir>] --extra mjx --extra sb3 runkit <verb> <module> ...
-```
-
-and only then imports the module (guarded by an env var so it relaunches once).
-The same trick `ctk play` uses to relaunch under `mjpython`. The resolved extras
-go into `meta.yaml` as provenance.
-
-`python -m module` keeps working unchanged, but cannot fix its own environment. A
-decorator attribute (e.g. `extras` recorded on the wrapped function) can still
-serve as a **check** after import: warn when the running environment lacks what
-the experiment declares.
+- **`project`** — a uv project other than the nearest `pyproject.toml` above
+  the experiment (see below). The key is reserved; setting it warns.
+- **A check under `python -m`**, which cannot relaunch: warn when the
+  experiment.toml asks for extras the running environment was not started with.
+- **No `${VAR}` interpolation** in paths for now; add it when a case needs more
+  than a base path, and then fail loudly on an unset variable
+  (`os.path.expandvars` leaves it in silently).
 
 ### An experiment with its own uv environment
 
-If the experiment's folder has its own `pyproject.toml`, runkit launches with
-`uv run --project <folder>` (or wherever `project = ...` points). `--project`
+If the experiment's folder has its own `pyproject.toml`, runkit already launches
+with `uv run --project <folder>` — the nearest one wins. `project = ...` would
+point elsewhere. `--project`
 selects that environment without changing the current directory, so the caller
 never has to `cd`. Such a project lists the shared library as a path dependency
 (e.g. `controlkit = { path = "../..", editable = true }`).
