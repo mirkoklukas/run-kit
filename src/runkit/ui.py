@@ -169,7 +169,8 @@ def run_started(*, name, run_id, run_dir, tag, changes, n_fields, launch=None):
         config = Text(f"all {n_fields} fields at their defaults", style="dim")
     else:
         note = f"{rest} more at their defaults · " if rest else ""
-        config = Group(_cfg_block(changes), f"[dim]{note}all in config.yaml[/dim]")
+        config = Group(_cfg_block(changes), f"[dim]{note}the full resolved config is "
+                                            f"in the run dir's config.yaml[/dim]")
     rows = [("id", run_id), *([("tag", tag)] if tag else []),
             ("dir", short_path(run_dir)),
             *([("launch", _launch_text(launch))] if launch else []),

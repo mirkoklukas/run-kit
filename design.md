@@ -418,7 +418,7 @@ leaves only what the body prints. A run is bracketed by two things:
        dir  runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a
     launch  uv · extras mjx, sb3 · vars XLA_PYTHON_CLIENT_PREALLOCATE
     config  lr: 0.0001
-            2 more at their defaults · all in config.yaml
+            2 more at their defaults · the full resolved config is in the run dir's config.yaml
 ...whatever the body prints...
   ◆ checkpoint  checkpoints/best  at 2m 40s  64k / 100k  64%  ep_return=20.7
     run  20 rows since the last: ep_return 18.4  loss 0.021  ·  it 260  steps 64k
