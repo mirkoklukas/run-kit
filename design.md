@@ -843,8 +843,8 @@ given, `run` first, each with its keys; with nothing named, every stream, and a
 run with nothing recorded says so. `follow` takes one stream. `plot` takes keys
 from several (they then need `--x`). The `mean` and `std` are over the values a key has,
 gaps left out. `trend` is the mean of the later half of those values minus the
-mean of the earlier half — is the key still moving? — shown as `↑ +0.08`,
-`↓ -0.02`, or `→` when the change is under 5% of the key's typical size (none
+mean of the earlier half — is the key still moving? — shown as `+0.08 ↑`,
+`-0.02 ↓`, or `→` when the change is under 5% of the key's typical size (none
 under 4 values). A per-row derivative of noisy metrics would be mostly noise;
 half against half is not. Over a group (`runkit metrics RUN reward/ --start
 -1000`) the table compares its terms: mean for the net contribution, std for

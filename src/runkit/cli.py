@@ -353,15 +353,16 @@ def _sorted_rows(rows, column, usage):
 
 
 def _trend_text(r):
-    """↑ +0.08 / ↓ -0.02 / → 0.001: flat when the change is under 5% of the
-    key's typical size, so noise does not read as a trend."""
+    """+0.08 ↑ / -0.02 ↓ / 0.001 →: flat when the change is under 5% of the
+    key's typical size, so noise does not read as a trend. The arrow last, so
+    the arrows line up at the column's right edge."""
     trend = r.get("trend")
     if trend is None:
         return ""
     scale = max(abs(r["min"]), abs(r["max"])) if r["mean"] is None else \
         max(abs(r["mean"]), r["std"] or 0.0, 1e-12)
     arrow = "→" if abs(trend) < 0.05 * scale else ("↑" if trend > 0 else "↓")
-    return f"{arrow} {_fmt(float(trend), sign=True)}"
+    return f"{_fmt(float(trend), sign=True)} {arrow}"
 
 
 def _metrics_follow(run_dir, series, opts, usage):

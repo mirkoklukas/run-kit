@@ -400,7 +400,7 @@ def test_trend_is_later_half_minus_earlier_half(tmp_path, capsys):
     cli.main(["metrics", str(d)])
     rows = {line.split()[0]: line for line in capsys.readouterr().out.splitlines()
             if line.strip() and line.split()[0] in ("up", "down", "flat", "rare")}
-    assert rows["up"].rstrip().endswith("↑ +4") and rows["down"].rstrip().endswith("↓ -4")
+    assert rows["up"].rstrip().endswith("+4 ↑") and rows["down"].rstrip().endswith("-4 ↓")
     assert "→" in rows["flat"] and "↑" not in rows["rare"] and "→" not in rows["rare"]
 
 
