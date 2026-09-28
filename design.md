@@ -875,7 +875,10 @@ when the run ends. A run left at `running` whose process is gone (on this host)
 is reported and ends the follow too. It polls once a second, reading only whole
 new lines; Ctrl-C stops following, never the run. The first column is runkit's
 `_elapsed_s`, shown as a duration. The header comes again when
-a new key appears, and every 40 rows.
+a new key appears or a column widens -- after a gray line saying which
+(`◇ widened: vx`, `◇ new column: air_s`), as a checkpoint has its own --, after a
+checkpoint's lines (so the columns are named where the rows resume), and every
+40 rows.
 
 Keys in a group sit side by side under one header naming the group, each column
 headed by its short name, so a column is as wide as `lin` and its values rather

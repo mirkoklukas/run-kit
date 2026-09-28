@@ -20,6 +20,7 @@ from .metrics import FOLDER
 
 POLL_S = 1.0          # how often to look for new rows
 HEADER_EVERY = 40     # reprint the header every so many rows, so it stays in view
+                      # (and after each checkpoint's lines: see `_Table.interrupt`)
 
 
 def follow(run_dir, stream="run", keys=None, *, first=None, poll=POLL_S, sleep=time.sleep):
@@ -51,16 +52,16 @@ def follow(run_dir, stream="run", keys=None, *, first=None, poll=POLL_S, sleep=t
         rows, offset = _read_from(path, offset)
         at = (pending or {}).get("metrics", {}).get(stream, count)
         if pending is not None and at <= count:
-            _print_checkpoint(status, pending)
+            _print_checkpoint(status, pending, table)
             pending = None
         for row in rows:
             table.row(row)
             count += 1
             if pending is not None and count >= at:
-                _print_checkpoint(status, pending)
+                _print_checkpoint(status, pending, table)
                 pending = None
         if pending is not None:
-            _print_checkpoint(status, pending)
+            _print_checkpoint(status, pending, table)
         if status.get("status") != "running":
             _print_end(run_dir, status)
             return status.get("status")
@@ -93,6 +94,8 @@ class _Table:
         self.keys = [k for k in keys if not k.endswith("/")] if keys else []
         self.widths = {}
         self.since_header = None
+        self.changed = {}                     # why the header comes again: {"widened": [...], "new": [...]}
+        self.headed = False                   # the first header printed yet
         self.warned = False
 
     def _wants(self, key):
@@ -127,6 +130,7 @@ class _Table:
         if new:
             self.keys += new
             self.since_header = None              # a new column: the header again
+            self.changed.setdefault("new", []).extend(new)
         order = self._order()
         elapsed = row.get("_elapsed_s")
         # runkit's `_elapsed_s`, under its own name, shown as a duration (9m 22s)
@@ -135,17 +139,38 @@ class _Table:
         for k, text in cells.items():             # a value that needs more room widens it
             need = max(len(text), len(self._split(k)[1]), self.MIN_WIDTH)
             if need > self.widths.get(k, 0):
+                if k in self.widths:              # not a column's first width: say why
+                    self.changed.setdefault("widened", []).append(k)
                 self.widths[k] = need
                 self.since_header = None
         return order, cells
 
+    def interrupt(self):
+        """Other lines went between the rows (a checkpoint's): the next row
+        brings the header again, so the columns are named where they resume."""
+        self.since_header = None
+
     def row(self, row):
         order, cells = self._take(row)
         if self.since_header is None or self.since_header >= HEADER_EVERY:
+            self._say_changed()
             self._print_header(order)
             self.since_header = 0
         self._print_line([cells[k].rjust(self.widths[k]) for k in ["_elapsed_s", *order]])
         self.since_header += 1
+
+    def _say_changed(self):
+        """A dim line before a header that comes again because the columns
+        changed mid-table -- like a checkpoint's lines, not part of the table."""
+        changed, self.changed = self.changed, {}
+        if not self.headed:                       # the first header needs no reason
+            self.headed = True
+            return
+        new, wide = (list(dict.fromkeys(changed.get(k, []))) for k in ("new", "widened"))
+        parts = ([f"new column{'s' * (len(new) > 1)}: {', '.join(new)}"] if new else []) \
+            + ([f"widened: {', '.join(wide)}"] if wide else [])
+        if parts:
+            ui.line(f"[dim]◇ {ui.escape('  ·  '.join(parts))}[/dim]")
 
     def _print_header(self, order):
         cols = ["_elapsed_s", *order]
@@ -228,9 +253,10 @@ def _checkpoint_record(run_dir, status):
         return None
 
 
-def _print_checkpoint(status, rec):
+def _print_checkpoint(status, rec, table):
     if not rec:
         return
+    table.interrupt()
     ui.checkpoint_saved(path=status.get("checkpoint"), elapsed_s=rec.get("elapsed_s") or 0,
                         info=rec.get("info"),
                         progress=rec.get("progress"), total=rec.get("total"),

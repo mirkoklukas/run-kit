@@ -296,9 +296,9 @@ def test_follow_puts_a_checkpoint_after_the_rows_it_followed(tmp_path, capsys, m
             _set_status(d, "ok", checkpoint="checkpoints/c")
 
     follow(d, sleep=sleep)
-    lines = [l.split()[1] if l.split()[0][0].isdigit() else l.strip()
+    lines = [l.split()[1] if l.split()[0][0].isdigit() else l.split()[0]
              for l in capsys.readouterr().out.splitlines()[1:]]
-    assert lines[-5:] == ["12", "13", "14", "CHECKPOINT", "15"]
+    assert lines[-6:] == ["12", "13", "14", "CHECKPOINT", "_elapsed_s", "15"]  # the header again
 
 
 
@@ -480,6 +480,19 @@ def test_star_is_the_same_as_the_group():
     assert cli.parse_keys(["eval:", "reward/*"]) == [("eval", "reward/")]
 
 
+
+
+def test_follow_says_why_the_header_comes_again(capsys):
+    """A column that widens or appears mid-table brings the header again, with a
+    dim line before it naming the columns; the first header has none."""
+    from runkit.follow import _Table
+    t = _Table(None)
+    t.row({"_elapsed_s": 1, "it": 1, "vx": 0.00061})
+    t.row({"_elapsed_s": 2, "it": 2, "vx": 0.000982})             # vx widens
+    t.row({"_elapsed_s": 3, "it": 3, "vx": 0.003, "air_s": 0.02})  # air_s appears
+    out, err = capsys.readouterr()
+    assert out.count("_elapsed_s") == 3
+    assert [l.strip() for l in err.splitlines()] == ["◇ widened: vx", "◇ new column: air_s"]
 
 def test_follow_groups_share_a_header(tmp_path, capsys):
     """Grouped keys sit side by side under one group header, headed by their

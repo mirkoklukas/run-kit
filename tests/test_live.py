@@ -225,6 +225,22 @@ def test_follow_another_stream_or_none(tmp_path, capsys):
     assert "_elapsed_s" in capsys.readouterr().err
 
 
+
+def test_follow_names_the_columns_again_after_a_checkpoint(tmp_path, capsys):
+    def body(cfg: Cfg, ctx: RunContext):
+        for i in range(4):
+            ctx.record(it=i, loss=0.5)
+            if i == 1:
+                with ctx.checkpoint("current"):
+                    pass
+
+    _run(body, tmp_path)
+    lines = capsys.readouterr().err.splitlines()
+    headers = [n for n, l in enumerate(lines) if l.split()[:1] == ["_elapsed_s"]]
+    ckpt = next(n for n, l in enumerate(lines) if "checkpoint" in l)
+    assert len(headers) == 2 and headers[0] < ckpt < headers[1]     # after the checkpoint's lines
+    assert lines[headers[1] + 1].split()[1:] == ["2", "0.5"]        # just before the next row
+
 def test_follow_default_from_experiment_toml(tmp_path):
     from runkit.settings import resolve_follow
     exp_file = tmp_path / "e.py"

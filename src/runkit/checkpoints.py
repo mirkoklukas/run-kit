@@ -105,6 +105,8 @@ class _Saving:
             ui.checkpoint_saved(path=ctx._live.checkpoint, elapsed_s=record["elapsed_s"],
                                 info=record["info"], progress=record["progress"],
                                 total=record["total"], summary=record["summary"])
+            if ctx._live.table is not None:           # the run's own --follow table
+                ctx._live.table.interrupt()
         except Exception:                                    # noqa: BLE001
             pass
         return False
