@@ -128,7 +128,8 @@ class _Table:
             self.since_header = None              # a new column: the header again
         order = self._order()
         elapsed = row.get("_elapsed_s")
-        cells = {"time": ui._duration(elapsed) if isinstance(elapsed, (int, float)) else ""}
+        # runkit's `_elapsed_s`, under its own name, shown as a duration (9m 22s)
+        cells = {"_elapsed_s": ui._duration(elapsed) if isinstance(elapsed, (int, float)) else ""}
         cells.update({k: "" if row.get(k) is None else ui._num(row[k]) for k in order})
         for k, text in cells.items():             # a value that needs more room widens it
             need = max(len(text), len(self._split(k)[1]), self.MIN_WIDTH)
@@ -142,11 +143,11 @@ class _Table:
         if self.since_header is None or self.since_header >= HEADER_EVERY:
             self._print_header(order)
             self.since_header = 0
-        self._print_line([cells[k].rjust(self.widths[k]) for k in ["time", *order]])
+        self._print_line([cells[k].rjust(self.widths[k]) for k in ["_elapsed_s", *order]])
         self.since_header += 1
 
     def _print_header(self, order):
-        cols = ["time", *order]
+        cols = ["_elapsed_s", *order]
         # widen a group's last column so the group name fits over its columns
         spans = {}
         for k in order:

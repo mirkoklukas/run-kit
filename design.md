@@ -166,6 +166,12 @@ defaults with `lr` set: the nested override is applied to the field's default
 (`default_factory()` or `default`), and a subclass default stays that subclass.
 Only a nested field with no default is built fresh from its class.
 
+A `dict` field (`dict`, `dict[str, float]`, optional ones) works the same way:
+an override is deep-merged into the dict the field would otherwise hold, so
+`schedule.env.w_support.start=2e6` changes that one leaf and keeps the rest of
+the default schedule. An override can add or change entries, not remove them;
+to drop one, set the field's default differently.
+
 A random seed belongs in the config too: it changes what the run produces, so
 it is part of *what* the experiment does, not of staging. For a fresh seed per
 run, `random_seed()` is a field whose default is drawn when the config is built
@@ -802,12 +808,12 @@ the stream's last 10 rows as a table (`--rows` picks others), then each new row
 as it is written, from any terminal or machine that sees the run dir:
 
 ```
-    time        it      loss
-     1.2s         3      0.25
-     1.5s         4       0.2
+  _elapsed_s    it      loss
+        1.2s     3      0.25
+        1.5s     4       0.2
   ◆ checkpoint  checkpoints/current  at 1.5s  5 / 12  42%
     5 rows since the last: loss 0.457  ·  it 4
-     1.8s         5     0.167
+        1.8s     5     0.167
   ✓ slow_5a35d412  ok in 3.7s  → runs/slow/latest
 ```
 
@@ -816,7 +822,8 @@ count it recorded (`checkpoint.yaml` `metrics`), so where it happened even when
 rows and a checkpoint arrive together — and stops with runkit's closing line
 when the run ends. A run left at `running` whose process is gone (on this host)
 is reported and ends the follow too. It polls once a second, reading only whole
-new lines; Ctrl-C stops following, never the run. The header comes again when
+new lines; Ctrl-C stops following, never the run. The first column is runkit's
+`_elapsed_s`, shown as a duration. The header comes again when
 a new key appears, and every 40 rows.
 
 Keys in a group sit side by side under one header naming the group, each column
@@ -825,9 +832,9 @@ than as `reward/lin` — nothing is cut, the group and the short name make the
 key:
 
 ```
-         reward                                                   loss
-   time      lin       yaw   torque  action_rate  joint_speed    train     eval
-   1.5s    0.412    -0.021   -0.013        0.017        -0.02    0.333      0.4
+               reward                                                   loss
+  _elapsed_s      lin       yaw   torque  action_rate  joint_speed    train     eval
+        1.5s    0.412    -0.021   -0.013        0.017        -0.02    0.333      0.4
 ```
 
 Values are compact (3 significant digits, `1.23M`, `12.3k`): a live table is

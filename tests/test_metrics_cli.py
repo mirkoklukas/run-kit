@@ -260,7 +260,7 @@ def test_follow_with_keys_and_a_dead_process(tmp_path, capsys):
     d = _live_run(tmp_path, pid=2 ** 22 + 12345)                      # no such process
     assert follow(d, keys=["loss"], sleep=lambda _: None) == "gone"
     out, err = capsys.readouterr()
-    assert out.splitlines()[0].split() == ["time", "loss"]            # only the keys asked for
+    assert out.splitlines()[0].split() == ["_elapsed_s", "loss"]            # only the keys asked for
     assert "is still `running`, but its process" in " ".join(err.split())
 
 
@@ -318,7 +318,7 @@ def test_follow_another_stream(tmp_path, capsys):
     _set_status(d, "ok")
     assert cli.main(["metrics", "follow", str(d), "eval:"]) == "ok"
     out = capsys.readouterr().out.splitlines()
-    assert out[0].split() == ["time", "ret"] and out[1].split()[1] == "7.5"
+    assert out[0].split() == ["_elapsed_s", "ret"] and out[1].split()[1] == "7.5"
 
 
 def test_keys_group_by_their_prefix(tmp_path, monkeypatch):
@@ -455,9 +455,9 @@ def test_follow_groups_pick_up_keys_recorded_later(tmp_path, capsys):
 
     assert follow(d, keys=["reward/"], sleep=sleep) == "ok"
     out = capsys.readouterr().out.splitlines()
-    headers = [l.split() for l in out if l.split() and l.split()[0] == "time"]
-    assert headers[0] == ["time"] and headers[-1] == ["time", "lin", "yaw"]  # short names
-    assert "reward" in out[out.index(next(l for l in out if l.split()[:1] == ["time"]
+    headers = [l.split() for l in out if l.split() and l.split()[0] == "_elapsed_s"]
+    assert headers[0] == ["_elapsed_s"] and headers[-1] == ["_elapsed_s", "lin", "yaw"]  # short names
+    assert "reward" in out[out.index(next(l for l in out if l.split()[:1] == ["_elapsed_s"]
                                           and "yaw" in l)) - 1]            # under `reward`
 
 
@@ -493,9 +493,9 @@ def test_follow_groups_share_a_header(tmp_path, capsys):
     follow(d, sleep=lambda _: None)
     lines = capsys.readouterr().out.splitlines()
     group_line, header = lines[0], lines[1].split()
-    assert header == ["time", "it", "lin", "joint_speed", "train", "eval"]  # groups together
+    assert header == ["_elapsed_s", "it", "lin", "joint_speed", "train", "eval"]  # groups together
     assert group_line.split() == ["reward", "loss"]
     at = lambda line, word: line.index(word)
     assert at(group_line, "reward") <= at(lines[1], "lin")             # over its columns
     assert at(lines[1], "joint_speed") < at(group_line, "loss") <= at(lines[1], "train")
-    assert sum(1 for l in lines if l.split()[:1] == ["time"]) == 1     # one header
+    assert sum(1 for l in lines if l.split()[:1] == ["_elapsed_s"]) == 1     # one header
