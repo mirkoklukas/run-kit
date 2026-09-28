@@ -453,3 +453,44 @@ def test_a_flag_that_takes_a_value_needs_one(tmp_path):
     assert not list(tmp_path.glob("*/*"))                      # nothing was started
     r = main(run, ["--tag", "t1", "seed=3", f"--root={tmp_path}"])
     assert r.context.dir.name.endswith("_t1") and r.config.seed == 3
+
+
+# -- dict fields ------------------------------------------------------------------
+
+import typing
+
+
+def _schedule():
+    return {"env": {"w_support": {"start": 1e6, "end": 5e6}, "w_air": {"start": 0.0}}}
+
+
+@dataclass
+class Sched:
+    schedule: dict = dataclasses.field(default_factory=_schedule)
+    weights: dict[str, float] = dataclasses.field(default_factory=lambda: {"a": 1.0, "b": 2.0})
+    maybe: typing.Optional[dict] = None
+
+
+def test_a_dict_override_changes_one_leaf():
+    cfg = build_cfg(Sched, parse_overrides(["schedule.env.w_support.start=2e6", "weights.b=3"]))
+    assert cfg.schedule == {"env": {"w_support": {"start": 2e6, "end": 5e6}, "w_air": {"start": 0.0}}}
+    assert cfg.weights == {"a": 1.0, "b": 3}
+    assert Sched().schedule == _schedule()                       # the default itself untouched
+    assert build_cfg(Sched, parse_overrides(["maybe.x=1"])).maybe == {"x": 1}  # no default: as given
+
+
+def test_a_dict_inside_a_nested_default_merges_too():
+    @dataclass
+    class Outer:
+        sched: Sched = dataclasses.field(
+            default_factory=lambda: Sched(weights={"a": 5.0, "b": 6.0}))
+
+    cfg = build_cfg(Outer, parse_overrides(["sched.weights.a=7"]))
+    assert cfg.sched.weights == {"a": 7, "b": 6.0}               # onto the parent's value
+
+
+def test_yaml_and_cli_both_merge_into_a_dict_default():
+    cfg = build_cfg(Sched, deep_merge({"schedule": {"env": {"w_air": {"end": 3e6}}}},
+                                      parse_overrides(["schedule.env.w_support.end=6e6"])))
+    assert cfg.schedule == {"env": {"w_support": {"start": 1e6, "end": 6e6},
+                                    "w_air": {"start": 0.0, "end": 3e6}}}

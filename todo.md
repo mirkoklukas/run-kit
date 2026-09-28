@@ -38,6 +38,13 @@
   once; vars alone are set in-process; `meta.yaml` records `launch`. Open: the
   `project` key, a check under `python -m` (proposals.md).
 
+- [x] **dict fields: merge overrides into the default** -- a `dict` config field was
+  *replaced* by a CLI override (`_schedule.env.w_support.start=2e6` left a dict with
+  only that leaf), unlike nested dataclasses, where c463d87 applies overrides to the
+  field's default. Fixed: overrides are deep-merged into the dict the field would
+  otherwise hold. control-kit's `PolicyCfg._schedule` deep-merge in `__post_init__`
+  can go.
+
 ## soft
 
 - [ ] **path schemes: where they apply** — `exp:` / `cwd:` / `SCHEME:` prefixes

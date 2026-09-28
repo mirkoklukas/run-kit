@@ -6,6 +6,7 @@ Two namespaces, strictly disjoint:
 
 Pure functions; no IO, no globals. Tested in isolation.
 """
+import copy
 import dataclasses
 import inspect
 import secrets
@@ -143,6 +144,8 @@ def build_cfg(cls, overrides, base=None):
     config the field would otherwise hold* -- its own default (`default_factory()`
     or `default`), or, below the top, the parent's value -- so every field the
     overrides do not mention keeps that value, not the nested class's defaults.
+    A `dict` field works the same way: the override is deep-merged into the dict
+    the field would otherwise hold, so `sched.env.w.start=2e6` changes one leaf.
     A subclass default stays that subclass. Only a field with no default is
     built fresh from its annotated class.
 
@@ -168,11 +171,22 @@ def build_cfg(cls, overrides, base=None):
                 kwargs[k] = build_cfg(type(current), v, base=current)
             else:
                 kwargs[k] = build_cfg(t, v)
+        elif isinstance(v, dict) and _is_dict_type(t):
+            # a dict field works like a nested config: the override is merged
+            # into the dict the field would otherwise hold, not put in its place
+            current = getattr(base, k) if base is not None else _field_default(fields[k])
+            kwargs[k] = deep_merge(copy.deepcopy(current), v) if isinstance(current, dict) else v
         else:
             kwargs[k] = _cast(t, v)
     if base is not None:
         return dataclasses.replace(base, **kwargs)
     return cls(**kwargs)
+
+
+def _is_dict_type(t):
+    """`dict`, `dict[str, X]`, `typing.Dict[...]`, or an optional one."""
+    t = _unwrap_optional(t)
+    return t is dict or typing.get_origin(t) is dict
 
 
 def _is_instance(x):
