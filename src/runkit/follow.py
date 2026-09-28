@@ -35,7 +35,9 @@ def follow(run_dir, stream="run", keys=None, *, first=None, poll=POLL_S, sleep=t
     table = _Table(keys)
     rows, offset = _read_from(path, 0)
     count = len(rows)                       # rows of the stream so far, printed or not
-    for row in rows[first if first is not None else slice(-10, None)]:
+    shown = rows[first if first is not None else slice(-10, None)]
+    table.size(shown)                       # one header for the rows shown first
+    for row in shown:
         table.row(row)
     seen = _checkpoint_seen(run_dir)
     while True:
@@ -72,14 +74,23 @@ def follow(run_dir, stream="run", keys=None, *, first=None, poll=POLL_S, sleep=t
 class _Table:
     """Rows as aligned columns: `_elapsed_s` as the first, then the keys.
 
+    Keys in a group (`reward/lin`, `reward/yaw`) sit side by side under one
+    header naming the group, each column headed by its short name -- so a
+    column is as wide as `lin` and its values, not as `reward/lin`. Nothing is
+    cut: the group and the short name make the key. A column widens (and the
+    header comes again) when a value needs more room.
+
     `keys` may name groups (`reward/`): the group's keys become columns as they
     appear in the rows, so a term first recorded later still shows up. No
     keys: every key but runkit's `_` ones, as they appear.
     """
 
+    MIN_WIDTH = 7          # fits most compact values (-0.0133), so widening is rare
+
     def __init__(self, keys):
         self.wanted = list(keys) if keys else None
         self.keys = [k for k in keys if not k.endswith("/")] if keys else []
+        self.widths = {}
         self.since_header = None
         self.warned = False
 
@@ -89,23 +100,76 @@ class _Table:
         return key in self.wanted or any(key.startswith(g) for g in self.wanted
                                          if g.endswith("/"))
 
-    def row(self, row):
+    @staticmethod
+    def _split(key):
+        """`reward/lin` -> ("reward", "lin"); `it` -> ("", "it")."""
+        group, sep, leaf = key.rpartition("/")
+        return (group, leaf) if sep else ("", key)
+
+    def _order(self):
+        """The keys with each group's columns side by side, groups in the order
+        they first appeared."""
+        groups = {}
+        for k in self.keys:
+            groups.setdefault(self._split(k)[0], []).append(k)
+        return [k for members in groups.values() for k in members]
+
+    def size(self, rows):
+        """Take in rows without printing them: their keys and widths, so the
+        rows shown first share one header."""
+        for row in rows:
+            self._take(row)
+
+    def _take(self, row):
+        """Columns and widths for a row; its cells, in column order."""
         new = [k for k in row if k not in self.keys and self._wants(k)]
         if new:
             self.keys += new
             self.since_header = None              # a new column: the header again
-        if self.since_header is None or self.since_header >= HEADER_EVERY:
-            self._print(["time", *self.keys], header=True)
-            self.since_header = 0
+        order = self._order()
         elapsed = row.get("_elapsed_s")
-        cells = [ui._duration(elapsed) if isinstance(elapsed, (int, float)) else ""]
-        cells += ["" if row.get(k) is None else ui._num(row[k]) for k in self.keys]
-        self._print(cells)
+        cells = {"time": ui._duration(elapsed) if isinstance(elapsed, (int, float)) else ""}
+        cells.update({k: "" if row.get(k) is None else ui._num(row[k]) for k in order})
+        for k, text in cells.items():             # a value that needs more room widens it
+            need = max(len(text), len(self._split(k)[1]), self.MIN_WIDTH)
+            if need > self.widths.get(k, 0):
+                self.widths[k] = need
+                self.since_header = None
+        return order, cells
+
+    def row(self, row):
+        order, cells = self._take(row)
+        if self.since_header is None or self.since_header >= HEADER_EVERY:
+            self._print_header(order)
+            self.since_header = 0
+        self._print_line([cells[k].rjust(self.widths[k]) for k in ["time", *order]])
         self.since_header += 1
 
-    def _print(self, cells, header=False):
-        widths = [max(8, len(k)) for k in ["time", *self.keys]]
-        text = "  ".join(str(c).rjust(w) for c, w in zip(cells, widths))
+    def _print_header(self, order):
+        cols = ["time", *order]
+        # widen a group's last column so the group name fits over its columns
+        spans = {}
+        for k in order:
+            spans.setdefault(self._split(k)[0], []).append(k)
+        for group, members in spans.items():
+            span = sum(self.widths[k] for k in members) + 2 * (len(members) - 1)
+            if group and len(group) > span:
+                self.widths[members[-1]] += len(group) - span
+        groups = [""] + [self._split(k)[0] for k in order]
+        if any(groups):
+            parts, i = [], 0
+            while i < len(cols):
+                j = i
+                while j + 1 < len(cols) and groups[j + 1] == groups[i]:
+                    j += 1
+                span = sum(self.widths[c] for c in cols[i:j + 1]) + 2 * (j - i)
+                parts.append(groups[i].ljust(span))
+                i = j + 1
+            self._print_line(parts, header=True)
+        self._print_line([self._split(c)[1].rjust(self.widths[c]) for c in cols], header=True)
+
+    def _print_line(self, parts, header=False):
+        text = "  ".join(parts).rstrip()
         if header and len(text) > ui.out.width and not self.warned:
             self.warned = True               # never cut: the terminal wraps; say how to narrow
             ui.line(f"[dim]{len(self.keys)} columns are wider than the terminal; name "

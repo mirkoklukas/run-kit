@@ -454,9 +454,11 @@ def test_follow_groups_pick_up_keys_recorded_later(tmp_path, capsys):
                 _set_status(d, "ok")
 
     assert follow(d, keys=["reward/"], sleep=sleep) == "ok"
-    headers = [l.split() for l in capsys.readouterr().out.splitlines()
-               if l.split() and l.split()[0] == "time"]
-    assert headers[0] == ["time"] and headers[-1] == ["time", "reward/lin", "reward/yaw"]
+    out = capsys.readouterr().out.splitlines()
+    headers = [l.split() for l in out if l.split() and l.split()[0] == "time"]
+    assert headers[0] == ["time"] and headers[-1] == ["time", "lin", "yaw"]  # short names
+    assert "reward" in out[out.index(next(l for l in out if l.split()[:1] == ["time"]
+                                          and "yaw" in l)) - 1]            # under `reward`
 
 
 def test_follow_an_empty_group(tmp_path, capsys, monkeypatch):
@@ -476,3 +478,24 @@ def test_follow_an_empty_group(tmp_path, capsys, monkeypatch):
 def test_star_is_the_same_as_the_group():
     assert cli.parse_keys(["reward/*"]) == [("run", "reward/")]
     assert cli.parse_keys(["eval:", "reward/*"]) == [("eval", "reward/")]
+
+
+
+def test_follow_groups_share_a_header(tmp_path, capsys):
+    """Grouped keys sit side by side under one group header, headed by their
+    short names; ungrouped keys keep theirs; nothing is cut."""
+    d = _live_run(tmp_path)
+    with open(d / "metrics" / "run.jsonl", "w") as f:
+        for i in range(3):
+            f.write(json.dumps({"_elapsed_s": i, "it": i, "reward/lin": 0.4, "loss/train": 0.2,
+                                "reward/joint_speed": -0.01, "loss/eval": 0.3}) + "\n")
+    _set_status(d, "ok")
+    follow(d, sleep=lambda _: None)
+    lines = capsys.readouterr().out.splitlines()
+    group_line, header = lines[0], lines[1].split()
+    assert header == ["time", "it", "lin", "joint_speed", "train", "eval"]  # groups together
+    assert group_line.split() == ["reward", "loss"]
+    at = lambda line, word: line.index(word)
+    assert at(group_line, "reward") <= at(lines[1], "lin")             # over its columns
+    assert at(lines[1], "joint_speed") < at(group_line, "loss") <= at(lines[1], "train")
+    assert sum(1 for l in lines if l.split()[:1] == ["time"]) == 1     # one header

@@ -817,7 +817,23 @@ rows and a checkpoint arrive together — and stops with runkit's closing line
 when the run ends. A run left at `running` whose process is gone (on this host)
 is reported and ends the follow too. It polls once a second, reading only whole
 new lines; Ctrl-C stops following, never the run. The header comes again when
-a new key appears, and every 40 rows. (`runkit tail` stays free for following a
+a new key appears, and every 40 rows.
+
+Keys in a group sit side by side under one header naming the group, each column
+headed by its short name, so a column is as wide as `lin` and its values rather
+than as `reward/lin` — nothing is cut, the group and the short name make the
+key:
+
+```
+         reward                                                   loss
+   time      lin       yaw   torque  action_rate  joint_speed    train     eval
+   1.5s    0.412    -0.021   -0.013        0.017        -0.02    0.333      0.4
+```
+
+Values are compact (3 significant digits, `1.23M`, `12.3k`): a live table is
+for watching them move; `runkit metrics info` has them in full. Columns are
+sized from the rows shown first, and widen — with the header again — only when
+a value needs more room. (`runkit tail` stays free for following a
 run's captured output, once that exists.)
 
 RUN_DIR defaults to the current folder (`cd "$(runkit latest experiment.py)"`,
