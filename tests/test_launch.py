@@ -129,3 +129,18 @@ def test_meta_records_what_the_process_was_launched_with(tmp_path, monkeypatch):
     monkeypatch.setenv(launch.LAUNCH, json.dumps(launched))
     r = exp.main([f"--root={tmp_path}"])
     assert yaml.safe_load((r.context.dir / "meta.yaml").read_text())["launch"] == launched
+
+
+def test_a_dotted_module_is_found_from_another_folder(lab, monkeypatch):
+    """Run from the experiment's own folder (`cd lab/rl`), a dotted target is
+    not under the cwd: python's import path finds it, so experiment.toml is not
+    skipped silently."""
+    monkeypatch.syspath_prepend(str(lab))                  # as an installed package would be
+    monkeypatch.chdir(lab / "lab" / "rl")
+    assert launch.experiment_file("lab.rl.policy") == (lab / "lab" / "rl" / "policy.py").resolve()
+    assert launch.experiment_file("no.such.module") is None
+    calls = []
+    monkeypatch.setattr(launch.shutil, "which", lambda name: "/usr/bin/uv")
+    launch.prepare("lab.rl.policy", ["run", "lab.rl.policy"], environ={},
+                   execvpe=lambda f, cmd, env: calls.append(cmd))
+    assert calls and "--extra" in calls[0]                  # relaunched with its extras

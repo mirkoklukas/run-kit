@@ -13,7 +13,8 @@ takes after the verb. The slot between the verb and the experiment is for
 runkit's own options (none yet).
 
 `root` and `latest` print a path, for `cd "$(runkit latest experiment.py)"`:
-the experiment's runs folder ({root}/{name}) and its latest run dir. Without an
+the experiment's runs folder ({root}/{name}) and its latest run dir. `latest`
+also re-points a wrong `latest` link; `runkit latest --fix EXP` does only that. Without an
 experiment, `runkit root [FOLDER]` prints the root itself, resolved from FOLDER
 (default: the current one): the nearest `experiment.toml`'s `[env] root`, else
 `./runs`.
@@ -77,11 +78,15 @@ def main(argv=None):
         sys.exit(f"unknown verb {verb!r}{hint}\n\n{HELP}")
 
     # runkit's own options sit between the verb and the experiment
+    passed = []                              # ... some belong to the verb itself
     while rest and rest[0].startswith("-"):
         opt = rest.pop(0)
         if opt in ("-h", "--help"):
             print(HELP)
             return
+        if verb == "latest" and opt == "--fix":
+            passed.append(opt)
+            continue
         sys.exit(f"unknown runkit option {opt!r} for {verb} "
                  f"(experiment arguments go after the experiment)")
 
@@ -89,7 +94,7 @@ def main(argv=None):
         return root_cmd(rest)
     if not rest:
         sys.exit(f"usage: runkit {verb} <experiment> ...")
-    target, args = rest[0], rest[1:]
+    target, args = rest[0], [*rest[1:], *passed]
     from .launch import prepare
     prepare(target, argv)                   # experiment.toml's extras / vars, before the import
     return dispatch(_find_experiment(_import(target), target), [verb, *args])

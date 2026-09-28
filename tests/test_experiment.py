@@ -317,3 +317,42 @@ def test_latest_via_runkit_follows_experiment_toml(tmp_path):
     out = subprocess.run([*_RUNKIT, "latest", "exp.py"], cwd=tmp_path / "pkg",
                          check=True, capture_output=True, text=True).stdout
     assert pathlib.Path(out.strip()).parent == (tmp_path / "from_toml" / "cli").resolve()
+
+
+def test_latest_heals_a_wrong_link(tmp_path, capsys):
+    exp = _make()
+    first = _run(exp, tmp_path, "seed=1")
+    second = _run(exp, tmp_path, "seed=2")
+    link = tmp_path / "demo" / "latest"
+    link.unlink()
+    link.symlink_to(first.context.dir.name)                  # re-pointed by something else
+    capsys.readouterr()
+    assert _run(exp, tmp_path, "latest") == second.context.dir
+    out, err = capsys.readouterr()
+    assert link.resolve() == second.context.dir             # healed
+    assert out.strip() == str(second.context.dir)           # stdout: only the path
+    assert f"pointed at {first.context.dir.name}" in " ".join(err.split())
+    _run(exp, tmp_path, "latest")                            # right already: nothing said
+    assert capsys.readouterr().err == ""
+
+
+def test_latest_fix_only_heals(tmp_path, capsys):
+    exp = _make()
+    r = _run(exp, tmp_path)
+    (tmp_path / "demo" / "latest").unlink()
+    capsys.readouterr()
+    assert _run(exp, tmp_path, "latest", "--fix") == r.context.dir
+    out, err = capsys.readouterr()
+    assert out == "" and "was missing" in err
+    assert (tmp_path / "demo" / "latest").resolve() == r.context.dir
+
+
+def test_runkit_latest_fix_before_the_experiment(tmp_path):
+    _write_pkg(tmp_path)
+    subprocess.run([sys.executable, "pkg/exp.py", "--root=runs"], cwd=tmp_path, check=True,
+                   capture_output=True)
+    (tmp_path / "runs" / "cli" / "latest").unlink()
+    done = subprocess.run([*_RUNKIT, "latest", "--fix", "pkg/exp.py", "--root=runs"],
+                          cwd=tmp_path, capture_output=True, text=True)
+    assert done.returncode == 0 and done.stdout == ""
+    assert (tmp_path / "runs" / "cli" / "latest").is_symlink()

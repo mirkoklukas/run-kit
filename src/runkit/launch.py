@@ -16,6 +16,7 @@ What the process was launched with goes to `RUNKIT_LAUNCH` (json), which
 `init_run` records in `meta.yaml` as `launch`. `python experiment.py` cannot
 change its own environment, so it is left as it is.
 """
+import importlib.util
 import json
 import os
 import pathlib
@@ -34,8 +35,10 @@ def experiment_file(target, cwd=None):
 
     A path (`lab/rl_env/test_policy.py`) as given; a dotted module
     (`lab.rl_env.test_policy`) looked up under the current folder, as `runkit`
-    imports it -- `.py`, or a package's `__init__.py`. None if not found (the
-    import will then say why).
+    imports it -- `.py`, or a package's `__init__.py` -- and otherwise where
+    python would import it from (an installed package, run from any folder).
+    That last lookup imports the module's parent packages, never the module.
+    None if not found (the import will then say why).
     """
     path = pathlib.Path(target)
     if target.endswith(".py") or path.is_file():
@@ -44,7 +47,13 @@ def experiment_file(target, cwd=None):
     for candidate in (base.with_suffix(".py"), base / "__init__.py"):
         if candidate.is_file():
             return candidate.resolve()
-    return None
+    try:
+        spec = importlib.util.find_spec(target)
+    except (ImportError, ValueError):
+        return None
+    if spec is None or not spec.origin or spec.origin in ("built-in", "frozen"):
+        return None
+    return pathlib.Path(spec.origin).resolve()
 
 
 def _stem(file):

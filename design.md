@@ -272,8 +272,10 @@ vars = { MUJOCO_GL = "egl" }                         # tables merge, this one wi
 Extras have to be in place *before* the experiment is imported — without them,
 the import is what fails — so they cannot come from the experiment itself (a
 decorator is read only after the import). `runkit <verb> <experiment> ...`
-reads them first, finding the experiment's file on disk without importing it
-(`lab.rl_env.test_policy` → `lab/rl_env/test_policy.py`), and re-executes itself
+reads them first, finding the experiment's file without importing it
+(`lab.rl_env.test_policy` → `lab/rl_env/test_policy.py`: under the current
+folder, else where python would import it from — so from the experiment's own
+folder too), and re-executes itself
 as
 
 ```bash
@@ -393,7 +395,9 @@ Both resolve the root as a run does (`--root`, else `experiment.toml`, else
 `./runs`). `root` with an experiment is that experiment's folder *in* the root;
 without one (or with a folder) it is the root itself. `latest` is computed from
 the run dirs (the latest started, as the `latest` link means), not read from the
-link.
+link. If the link points elsewhere (or is missing), `latest` re-points it and
+says so on stderr — the link is a shortcut for people and should not stay
+wrong; `runkit latest --fix experiment.py` does only that, printing nothing.
 
 One catch: a bare first argument that is a verb is taken as the verb, so a
 config file named exactly `eval`, `viz`, `root` or `latest` (no extension)

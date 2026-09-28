@@ -10,8 +10,9 @@ that verb's arguments:
 
 and two built in, for every experiment, that print a path (`cd "$(...)"`):
 
-  root    [--root=..]   -> {root}/{name}, this experiment's runs
-  latest  [--root=..]   -> its latest run dir
+  root    [--root=..]           -> {root}/{name}, this experiment's runs
+  latest  [--root=..] [--fix]   -> its latest run dir; re-points a wrong `latest`
+                                   link (--fix: only that, nothing printed)
 
 Two disjoint namespaces (see design.md):
   bare key=value -> cfg overrides   (the "what")
@@ -93,14 +94,18 @@ def _path_verb(name, roles, verb, argv):
     from . import ui
     from .runs import run_dirs
     from .settings import resolve_root
+    usage = (f"usage: <experiment> root [--root=DIR]" if verb == "root" else
+             f"usage: <experiment> latest [--root=DIR] [--fix]")
     if "--help" in argv or "-h" in argv:
-        what = "its runs folder, {root}/" + name if verb == "root" else "its latest run dir"
-        print(f"usage: <experiment> {verb} [--root=DIR]\n\nprints {what}")
+        what = "its runs folder, {root}/" + name if verb == "root" else \
+            "its latest run dir, re-pointing the `latest` link if it is wrong"
+        print(f"{usage}\n\nprints {what}")
         return
     cfg_tokens, flags, positionals = split_argv(argv)
+    fix = flags.pop("fix", False) if verb == "latest" else False
     unknown = sorted(set(flags) - {"root"})
-    if cfg_tokens or positionals or unknown:
-        sys.exit(f"usage: <experiment> {verb} [--root=DIR]")
+    if cfg_tokens or positionals or unknown or fix not in (True, False):
+        sys.exit(usage)
     if not roles:
         sys.exit(f"{name}: nothing registered, so no file to resolve its root from")
     script = next(iter(roles.values()))._runkit_script
@@ -114,8 +119,29 @@ def _path_verb(name, roles, verb, argv):
         if not dirs:
             sys.exit(f"no runs of {name!r} under {(root / name).resolve()}")
         path = dirs[-1].resolve()
+        _heal_latest(path)
+        if fix:
+            return path
     print(path)
     return path
+
+
+def _heal_latest(run_dir):
+    """Re-point `{root}/{name}/latest` at `run_dir` (the latest started run, as
+    worked out from the run dirs) if it is missing or points elsewhere -- the
+    link is a shortcut for people, so it should not stay wrong. Said on stderr."""
+    from . import ui
+    from .utils import point_latest
+    link = run_dir.parent / "latest"
+    try:
+        now = link.resolve() if link.is_symlink() else None
+    except OSError:
+        now = None
+    if now == run_dir:
+        return
+    point_latest(run_dir)
+    was = f"pointed at {now.name}" if now else "was missing"
+    ui.line(f"[dim]`latest` {was}; now {run_dir.name}[/dim]")
 
 
 def _run_args(run, argv):
