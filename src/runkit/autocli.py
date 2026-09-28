@@ -28,6 +28,7 @@ from .config import annotated_cfg, build_cfg, deep_merge, parse_overrides, split
 from .utils import load_yaml, resolve_config_path
 
 VERBS = ("run", "eval", "viz")
+BARE_FLAGS = ("follow",)             # flags that also stand alone: `--follow` is `--follow run`
 PATH_VERBS = ("root", "latest")      # built in: print a path, need no registration
 
 
@@ -196,6 +197,8 @@ def _check_flags(fn, flags):
         raise ValueError(f"unknown flag(s): {sorted(bad)}; allowed: {sorted(allowed)}")
     params = inspect.signature(fn, follow_wrapped=False).parameters
     for k, v in flags.items():
+        if k in BARE_FLAGS:
+            continue
         if v is True and not isinstance(params[k].default, bool):
             raise ValueError(f"--{k.replace('_', '-')} needs a value: "
                              f"--{k.replace('_', '-')}=VALUE")

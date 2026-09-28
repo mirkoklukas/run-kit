@@ -195,3 +195,43 @@ def test_compile_metrics_gives_aligned_columns(tmp_path):
     later = m["it"] >= 2                                         # a mask from one column ...
     assert m["eval_return"][later][0] == 12.0 and m["note"][later][0] == "eval"  # ... any other
     assert compile_metrics(r.context.dir, "nope") == {}
+
+
+# -- --follow: the run prints a stream as it goes ---------------------------------
+
+def _rec(cfg: Cfg, ctx: RunContext):
+    for i in range(3):
+        ctx.record(it=i, loss=1.0 / (i + 1))
+        ctx.record("reward", it=i, lin=0.4)
+
+
+def test_a_run_follows_its_run_stream_by_default(tmp_path, capsys):
+    _run(_rec, tmp_path)
+    out, err = capsys.readouterr()
+    lines = [l.split() for l in err.splitlines()]
+    assert ["_elapsed_s", "it", "loss"] in lines                  # the table header
+    assert sum(1 for l in lines if l[1:] in (["0", "1"], ["1", "0.5"], ["2", "0.333"])) == 3
+    assert "_elapsed_s" not in out                                # stderr, not stdout
+    assert not any("lin" in l for l in lines if l and l[0] == "_elapsed_s")
+
+
+def test_follow_another_stream_or_none(tmp_path, capsys):
+    _run(_rec, tmp_path, "--follow", "reward")
+    headers = [l.split() for l in capsys.readouterr().err.splitlines() if "_elapsed_s" in l]
+    assert headers == [["_elapsed_s", "it", "lin"]]
+    _run(_rec, tmp_path, "--follow=none")
+    assert "_elapsed_s" not in capsys.readouterr().err
+    _run(_rec, tmp_path, "--follow")                              # bare: the run stream
+    assert "_elapsed_s" in capsys.readouterr().err
+
+
+def test_follow_default_from_experiment_toml(tmp_path):
+    from runkit.settings import resolve_follow
+    exp_file = tmp_path / "e.py"
+    exp_file.write_text("")
+    assert resolve_follow(exp_file, "e") == "run"
+    (tmp_path / "experiment.toml").write_text('[env]\nfollow = "none"\n\n[env.other]\nfollow = "reward"\n')
+    assert resolve_follow(exp_file, "e") is None
+    assert resolve_follow(exp_file, "other") == "reward"
+    assert resolve_follow(exp_file, "e", explicit="run") == "run"   # the flag wins
+    assert resolve_follow(exp_file, "e", explicit=True) == "run"    # a bare --follow

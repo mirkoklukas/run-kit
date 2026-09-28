@@ -27,7 +27,7 @@ import uuid
 import yaml
 
 from . import ui
-from .settings import resolve_root
+from .settings import resolve_follow, resolve_root
 from .utils import config_changes, dump_retval, point_latest, serialize_cfg
 
 
@@ -53,6 +53,8 @@ class _Live:
     written: float | None = None       # monotonic time progress was last written
     records: dict = dataclasses.field(default_factory=dict)   # lines appended per metrics stream
     windows: dict = dataclasses.field(default_factory=dict)   # per stream: rows since the last checkpoint
+    follow: str | None = None          # the stream printed as it is recorded (--follow)
+    table: object = None               # ... and the table that prints it
 
 
 
@@ -397,8 +399,10 @@ def experiment(*, name):
 def _run_wrapper(f, name):
     """Wrap a run body `f(cfg, ctx)`: create the run dir, record the outcome.
 
-    The wrapper accepts the staging flags as keyword args -- `tag`, `root` --
-    which `autocli` forwards from the CLI; their names *are* the allowed flags.
+    The wrapper accepts the staging flags as keyword args -- `tag`, `root`,
+    `follow` -- which `autocli` forwards from the CLI; their names *are* the
+    allowed flags. `follow` names the stream printed as the run goes (default
+    `run`, from experiment.toml's `follow`; `none` for nothing).
     Without `root`, it comes from the nearest `experiment.toml`, else `./runs`
     (`settings.resolve_root`).
     """
@@ -406,13 +410,17 @@ def _run_wrapper(f, name):
     module = _module_name(f)
 
     @functools.wraps(f)
-    def wrapper(cfg, *, tag=None, root=None):
+    def wrapper(cfg, *, tag=None, root=None, follow=None):
         root = resolve_root(script, script.stem, explicit=root)
+        follow = resolve_follow(script, script.stem, explicit=follow)
         ctx = init_run(cfg, name=name, tag=tag, root=root, script=script,
                        module=module)
         _announce(name, cfg, ctx, tag)
         started, t0 = datetime.datetime.now(), time.monotonic()
         ctx._live = _Live(t0=t0, started=_stamp(started))   # live: the body may write into the run
+        if follow is not None:               # print this stream's rows as they are recorded
+            from .follow import _Table
+            ctx._live.follow, ctx._live.table = follow, _Table(None, stderr=True)
         _write_status(ctx.dir, status="running", started=_stamp(started))
         status, error = "ok", None
         try:

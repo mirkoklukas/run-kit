@@ -218,6 +218,7 @@ as `1e3`.
 --tag=TAG        variant label; becomes part of the run dir name
 --config=PATH    the config yaml (same as the bare positional)
 --root=DIR       where run dirs are created (default: experiment.toml, else ./runs)
+--follow=STREAM  the metrics stream printed as the run goes (default: run; none: nothing)
 ```
 
 The accepted flags are not a hardcoded list — they are the keyword arguments the
@@ -225,7 +226,8 @@ decorated function takes, so anything else is rejected before the run starts.
 Arguments may come in any order after the experiment; a flag's value is written
 `--tag=gait` or `--tag gait`. A flag that takes a value but gets none is refused
 (`--tag needs a value`) — so `--tag env.x=1`, where the next token is config,
-cannot quietly make the tag `True`.
+cannot quietly make the tag `True`. The exception is `--follow`: alone, it means
+`--follow run`, the default spelled out.
 `name` is not among them: it is the experiment's identity, set once in the
 decorator, with no command-line override.
 
@@ -298,8 +300,9 @@ launch:
   project: /abs/path/to/control-kit
 ```
 
-`vars` values become strings (a boolean as `true` / `false`). An unknown key
-warns; an experiment file named like an `[env]` key (`vars.py`) cannot have an
+`vars` values become strings (a boolean as `true` / `false`). `follow` sets the
+stream a run prints as it goes (`follow = "none"` for an experiment that prints
+its own progress; `--follow` overrides it). An unknown key warns; an experiment file named like an `[env]` key (`vars.py`) cannot have an
 override and is refused. `python experiment.py` cannot change its own
 environment, so it runs as it is and records `launch: null`.
 
@@ -441,6 +444,26 @@ the end of a long run answers that without scrolling back. For a failed run it
 is `✗ ... failed after 2.1s (ValueError: bad shape) → .../traceback.txt`,
 printed just before python's own traceback; an interrupted one says so. Like the
 status writes, it is best-effort and never replaces the experiment's exception.
+
+While the run goes, it follows its `run` stream: each `ctx.record(...)` to it
+prints a row, in the same table as `runkit metrics follow` from another
+terminal — `_elapsed_s`, the keys, groups under one header, compact numbers:
+
+```
+_elapsed_s       it    steps  ep_return   ep_len      vx
+    9m 22s      194    2.38M       28.5      500  0.0623
+  ◆ checkpoint  checkpoints/current  at 9m 24s  2.39M / 10M  24%
+    run  20 rows since the last: ep_return 28.3  ep_len 500  ·  it 194  steps 2.38M
+    9m 25s      195     2.4M       28.6      500  0.0616
+```
+
+So the run's own terminal and `follow` from elsewhere look the same. The table
+goes to stderr with the rest of runkit's output, so stdout stays the
+experiment's. `--follow reward` prints another stream instead; `--follow none`
+nothing — for an experiment that prints its own progress, or set once for a
+folder with `follow = "none"` in `experiment.toml`. Every row is printed, so
+the `run` stream should be recorded at a human pace (per iteration, not per
+environment step) — one more reason to keep it small.
 
 Each checkpoint prints a line once it is complete (see "Checkpoints"): its
 folder relative to the run dir, how far into the run, the progress and its

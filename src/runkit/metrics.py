@@ -50,6 +50,11 @@ def append(ctx, stream, values):
         ctx._live.records[stream] = ctx._live.records.get(stream, 0) + 1
         # summarized at the next checkpoint, every stream the run records
         _add_to_window(ctx._live.windows.setdefault(stream, {}), row)
+        if ctx._live.follow == stream:      # shown as it goes (--follow), best-effort
+            try:
+                ctx._live.table.row(row)
+            except Exception:                                # noqa: BLE001
+                pass
 
 
 def load_metrics(run_dir, stream="run"):

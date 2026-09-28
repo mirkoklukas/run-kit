@@ -28,7 +28,7 @@ from .utils import resolve_config_path
 
 FILENAME = "experiment.toml"
 DEFAULT_ROOT = "runs"                # relative to cwd, when nothing says otherwise
-KEYS = ("root", "extras", "vars", "project")   # [env] keys; `project` is reserved, not read yet
+KEYS = ("root", "extras", "vars", "follow", "project")   # [env] keys; `project`: not read yet
 
 
 def find_toml(start):
@@ -52,7 +52,7 @@ def read_env(start, stem=None):
     boolean as `true` / `false`. No file: no settings.
     """
     toml = find_toml(start)
-    out = {"toml": toml, "root": None, "extras": [], "vars": {}}
+    out = {"toml": toml, "root": None, "extras": [], "vars": {}, "follow": None}
     if toml is None:
         return out
     try:
@@ -77,6 +77,7 @@ def read_env(start, stem=None):
             ui.warn(f"{toml} {where}: `project` is not read yet; the uv project is the "
                     f"nearest pyproject.toml above the experiment")
     out["root"] = override.get("root", base.get("root"))
+    out["follow"] = override.get("follow", base.get("follow"))
     extras = override["extras"] if "extras" in override else base.get("extras", [])
     if not isinstance(extras, list) or not all(isinstance(e, str) for e in extras):
         raise ValueError(f"{toml}: `extras` must be a list of names, got {extras!r}")
@@ -93,6 +94,18 @@ def _env_value(v):
         return str(v)
     raise ValueError(f"experiment.toml: a `vars` value must be a string, number or "
                      f"boolean, got {v!r}")
+
+
+def resolve_follow(start, stem=None, explicit=None):
+    """The stream a run prints as it goes: `explicit` (`--follow`) >
+    `[env.<stem>]` > `[env]` > `run`. A bare `--follow` is `run`; `none` (or
+    false) prints nothing -- for an experiment that prints its own progress."""
+    value = explicit if explicit is not None else read_env(start, stem)["follow"]
+    if value is None or value is True:
+        return "run"
+    if value is False or str(value).lower() in ("none", "off", "false", ""):
+        return None
+    return str(value)
 
 
 def resolve_root(start, stem=None, explicit=None):

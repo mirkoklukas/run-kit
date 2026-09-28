@@ -87,7 +87,8 @@ class _Table:
 
     MIN_WIDTH = 7          # fits most compact values (-0.0133), so widening is rare
 
-    def __init__(self, keys):
+    def __init__(self, keys, stderr=False):
+        self.stderr = stderr                  # in a run: runkit's own output, not stdout
         self.wanted = list(keys) if keys else None
         self.keys = [k for k in keys if not k.endswith("/")] if keys else []
         self.widths = {}
@@ -175,8 +176,11 @@ class _Table:
             self.warned = True               # never cut: the terminal wraps; say how to narrow
             ui.line(f"[dim]{len(self.keys)} columns are wider than the terminal; name "
                     f"keys to narrow it, e.g. `runkit metrics follow RUN loss reward/`[/dim]")
-        ui.out.print(f"[bold]{text}[/bold]" if header else text, markup=header,
-                     highlight=False, soft_wrap=True, crop=False)
+        console = ui.err if self.stderr else ui.out
+        if self.stderr:
+            ui._flush_stdout()               # the body's prints first, as ui.line does
+        console.print(f"[bold]{text}[/bold]" if header else text, markup=header,
+                      highlight=False, soft_wrap=True, crop=False)
 
 
 def _read_from(path, offset):
