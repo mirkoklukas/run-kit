@@ -42,23 +42,27 @@ complete checkpoint is refused.
 - **The lineage in `meta.yaml`**:
   `branch: {run: test_policy_a3f9c1e7, dir: ..., checkpoint: best, steps: 3000000}`
   -- so any run's history can be traced back, branch by branch.
-- **The checkpoint handed to the body**: `ctx.branch` is the `Checkpoint` the
-  run branches from (its folder, `info`, `summary`), or None for a fresh run --
-  the same name as the flag, and `if ctx.branch:` asks "is this run a branch".
+- **The checkpoint handed to the body**, as its `branch` argument: the
+  `Checkpoint` the run branches from, or None for a fresh run. The same object
+  `ctx.checkpoint` gives when saving -- what the body wrote into `ckpt.dir` and
+  `ckpt.info`, it reads back from `branch.dir` and `branch.info` (also
+  `name`, `index`, `summary`). runkit passes it only to a run function that
+  declares the parameter, found by name as `cfg` is; the others keep
+  `(cfg, ctx)`.
 - **A banner line**: `branch  a3f9c1e7:best (3.0M steps)`.
 
 ### What the experiment does
 
 Only the experiment knows its state, so it saves what it needs to continue in
-its checkpoints, and loads it when `ctx.branch` is set:
+its checkpoints, and loads it when handed a `branch`:
 
 ```python
 @exp.run
-def run(cfg, ctx):
-    if ctx.branch:
-        model = PPO.load(ctx.branch.dir / "model.zip", env=venv)
-        venv = VecNormalize.load(ctx.branch.dir / "vecnormalize.pkl", venv)
-        start = ctx.branch.info["steps"]
+def run(cfg, ctx, branch=None):
+    if branch:
+        model = PPO.load(branch.dir / "model.zip", env=venv)
+        venv = VecNormalize.load(branch.dir / "vecnormalize.pkl", venv)
+        start = branch.info["steps"]
     ...
     model.learn(total_timesteps=cfg.steps - start, reset_num_timesteps=False)
 ```
@@ -84,9 +88,14 @@ continuing needs*. (This is Ray Train's `get_checkpoint()` and SB3's
 like Lightning, can do more because they know the state.) runkit catches the
 obvious slips:
 
+- **A run that takes no `branch`**: `--branch` on an experiment whose run
+  function has no `branch` parameter is refused before the run starts
+  ("test_policy.run takes no `branch`: it can't continue from a checkpoint").
+  Declaring the parameter is the experiment's side of the handshake, and it
+  shows in the signature, not only in the body.
 - **An empty checkpoint**: a branch of one whose folder holds nothing but
   `checkpoint.yaml` is refused -- the body never saved anything.
-- **An unread branch**: `ctx.branch` notes when its folder is used; if a branch
+- **An unread branch**: `branch` notes when its folder is used; if a branch
   reaches its first checkpoint without the body having touched it, runkit
   warns. This catches "forgot to load", not "loaded half".
 - **A round-trip test**, the only real check, run once per experiment rather
@@ -138,7 +147,7 @@ the parent's (3.0M, 3.01M, ...), so the two plot on one axis with `--x steps`.
   and restored in place on a branch, so a fresh run and a branch take one code
   path. runkit ships codecs for yaml, numpy and torch; a library registers its
   own on import (control-kit: sb3, VecNormalize), an experiment with
-  `exp.codec`; pickle only when asked for. It sits on top of `ctx.branch`
+  `exp.codec`; pickle only when asked for. It sits on top of the `branch` argument
   without changing it.
 - **Live adjustment** of a running run (`runkit adjust RUN key=value`, applied
   by the experiment at safe points and recorded with its step) -- deliberately
