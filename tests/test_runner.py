@@ -101,6 +101,22 @@ def test_yaml_exponent_cast_to_annotated_float(tmp_path):
     assert retval["lr"] == 1e-4 and isinstance(retval["lr"], float)
 
 
+def test_yaml_list_cast_to_annotated_tuple():
+    """yaml has no tuples: a list for a tuple field becomes a tuple (nested too), so
+    a config.yaml copy of the defaults equals them."""
+    from runkit.config import build_cfg
+
+    @dataclass
+    class T:
+        pair: tuple = (-5.0, 5.0)
+        limits: tuple = ((-60, 60), (-100, 100))
+        lens: tuple[float, ...] = (0.05, 0.15)
+
+    cfg = build_cfg(T, {"pair": [-5.0, 5.0], "limits": [[-60, 60], [-100, 100]],
+                        "lens": ["5e-2", 0.15]})
+    assert cfg == T()
+
+
 def test_short_flags_are_flags(tmp_path):
     """`-x` parses as a flag, so a stray one is rejected rather than taken as a
     config path."""

@@ -219,8 +219,14 @@ def _cast(t, v):
     annotation lets us recover the intended value. Only the scalar leaf types are
     touched; containers, dataclasses, and anything we can't convert pass through
     unchanged, so a genuinely wrong value still surfaces at `cls(**kwargs)`.
+
+    Tuples too: yaml has none, so a `tuple` field comes back from `config.yaml` as
+    a list, which never equals the tuple default (the banner would list it as
+    changed). A list for a `tuple` / `tuple[...]` field becomes a tuple.
     """
     t = _unwrap_optional(t)
+    if (t is tuple or typing.get_origin(t) is tuple) and isinstance(v, list):
+        return _to_tuple(t, v)
     if v is None or not isinstance(t, type) or isinstance(v, t):
         return v
     if t is bool:
@@ -233,6 +239,18 @@ def _cast(t, v):
         except (TypeError, ValueError):
             return v
     return v
+
+
+def _to_tuple(t, v):
+    """List `v` as a tuple for annotation `t`: elements cast per `tuple[X, ...]` /
+    `tuple[A, B]`; under a bare `tuple`, nested lists become tuples as well
+    (`((-60, 60), ...)` round-trips)."""
+    args = typing.get_args(t)
+    if len(args) == 2 and args[1] is Ellipsis:
+        return tuple(_cast(args[0], x) for x in v)
+    if args and len(args) == len(v):
+        return tuple(_cast(a, x) for a, x in zip(args, v))
+    return tuple(_to_tuple(tuple, x) if isinstance(x, list) else x for x in v)
 
 
 def _to_int(v):
