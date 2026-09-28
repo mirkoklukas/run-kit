@@ -48,8 +48,8 @@ def append(ctx, stream, values):
         f.write(json.dumps(row) + "\n")
     if ctx._live is not None:               # counted for checkpoint.yaml
         ctx._live.records[stream] = ctx._live.records.get(stream, 0) + 1
-        if stream == "run":                 # summarized at the next checkpoint
-            _add_to_window(ctx._live.window, row)
+        # summarized at the next checkpoint, every stream the run records
+        _add_to_window(ctx._live.windows.setdefault(stream, {}), row)
 
 
 def load_metrics(run_dir, stream="run"):

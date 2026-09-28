@@ -230,7 +230,7 @@ def _print_checkpoint(status, rec):
     ui.checkpoint_saved(path=status.get("checkpoint"), elapsed_s=rec.get("elapsed_s") or 0,
                         info=rec.get("info"),
                         progress=rec.get("progress"), total=rec.get("total"),
-                        summary=(rec.get("summary") or {}).get("run"))
+                        summary=rec.get("summary") or {})
 
 
 def _print_end(run_dir, status):

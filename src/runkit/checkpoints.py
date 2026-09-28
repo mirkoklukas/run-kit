@@ -83,12 +83,15 @@ class _Saving:
             # where the run was, and how it went since the last checkpoint
             "progress": ctx._live.progress,
             "total": ctx._live.total,
-            "summary": {"run": s} if (s := summarize_window(ctx._live.window)) else {},
+            # per stream the run recorded to since the last checkpoint (`run` first)
+            "summary": {s: w for s, w in sorted(
+                ((s, summarize_window(w)) for s, w in ctx._live.windows.items()),
+                key=lambda sw: (sw[0] != "run", sw[0])) if w},
         }
         (staging / RECORD).write_text(yaml.safe_dump(record, sort_keys=False))
         _swap_in(staging, self.final)
         ctx._live.checkpoints = ckpt.index
-        ctx._live.window = {}                 # the next checkpoint summarizes from here
+        ctx._live.windows = {}                # the next checkpoint summarizes from here
         ckpt.metrics = dict(ctx._live.records)
         ckpt.summary = record["summary"]
         ckpt.dir = self.final
@@ -101,7 +104,7 @@ class _Saving:
             from . import ui
             ui.checkpoint_saved(path=ctx._live.checkpoint, elapsed_s=record["elapsed_s"],
                                 info=record["info"], progress=record["progress"],
-                                total=record["total"], summary=record["summary"].get("run"))
+                                total=record["total"], summary=record["summary"])
         except Exception:                                    # noqa: BLE001
             pass
         return False

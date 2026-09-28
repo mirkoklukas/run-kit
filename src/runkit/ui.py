@@ -191,23 +191,27 @@ def _duration(seconds):
 
 
 def checkpoint_saved(*, path, elapsed_s, info, progress=None, total=None, summary=None):
-    """Two lines when a checkpoint is complete: its folder (relative to the run
-    dir), how far into the run, the progress and its info; then the `run`
-    metrics since the last checkpoint -- means, and counters by their last
-    value. Each shortened if long."""
+    """Lines when a checkpoint is complete: its folder (relative to the run dir),
+    how far into the run, the progress and its info; then, per metrics stream
+    the run recorded to since the last checkpoint (`run` first), those rows --
+    means, and counters by their last value. Each shortened if long."""
     text = f"[cyan]◆[/cyan] checkpoint  {escape(path)}  [dim]at {_duration(elapsed_s)}"
     if progress is not None or total:
         text += "  " + escape(_progress_text(progress or 0, total))
     if info:
         text += "  " + escape(_clip("  ".join(f"{k}={_num(v)}" for k, v in info.items())))
     line(text + "[/dim]")
-    if summary:
-        means = "  ".join(f"{k} {_num(v)}" for k, v in summary["mean"].items())
-        lasts = "  ".join(f"{k} {_num(v)}" for k, v in summary["last"].items())
-        rows = summary["rows"]
+    summary = summary or {}
+    if "rows" in summary:                    # one stream's summary, as older records have
+        summary = {"run": summary}
+    width = max((len(s) for s in summary), default=0)
+    for stream, s in summary.items():
+        means = "  ".join(f"{k} {_num(v)}" for k, v in s["mean"].items())
+        lasts = "  ".join(f"{k} {_num(v)}" for k, v in s["last"].items())
+        rows = s["rows"]
         body = "  ·  ".join(p for p in (means, lasts) if p)
-        line(f"[dim]  {rows} row{'s' if rows != 1 else ''} since the last: "
-             f"{escape(_clip(body, 100))}[/dim]")
+        line(f"[dim]  {escape(stream.ljust(width))}  {rows} row{'s' if rows != 1 else ''} "
+             f"since the last: {escape(_clip(body, 100))}[/dim]")
 
 
 def _progress_text(progress, total):

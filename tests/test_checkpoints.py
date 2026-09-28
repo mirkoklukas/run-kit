@@ -230,3 +230,25 @@ def test_a_checkpoint_summarizes_the_rows_since_the_last_one(tmp_path, capsys):
     err = "".join(capsys.readouterr().err.split())
     assert "checkpoints/aat" in err and "40/10040%" in err
     assert "4rowssincethelast:loss2.5ret1.67·it3steps40" in err
+
+
+def test_a_checkpoint_summarizes_every_stream_the_run_recorded(tmp_path, capsys):
+    def body(cfg: Cfg, ctx: RunContext):
+        for i in range(4):
+            ctx.record(it=i, ep_return=float(i))
+            ctx.record("reward", it=i, lin=0.4, slip=-0.1 * i)
+        with ctx.checkpoint("a"):
+            pass
+        ctx.record("reward", it=4, lin=0.5)                    # only reward since "a"
+        with ctx.checkpoint("b"):
+            pass
+
+    r = _go(_exp(body), tmp_path)
+    ck = {c.name: c for c in r.context.checkpoints()}
+    assert list(ck["a"].summary) == ["run", "reward"]          # run first
+    assert ck["a"].summary["reward"] == {"rows": 4, "mean": {"lin": 0.4, "slip": -0.15000000000000002},
+                                         "last": {"it": 3}}
+    assert list(ck["b"].summary) == ["reward"]                 # nothing new in run
+    err = "".join(capsys.readouterr().err.split())
+    assert "run4rowssincethelast:ep_return1.5·it3" in err
+    assert "reward4rowssincethelast:lin0.4slip-0.15·it3" in err

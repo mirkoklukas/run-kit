@@ -414,7 +414,7 @@ leaves only what the body prints. A run is bracketed by two things:
             2 more at their defaults · all in config.yaml
 ...whatever the body prints...
   ◆ checkpoint  checkpoints/best  at 2m 40s  64k / 100k  64%  ep_return=20.7
-    20 rows since the last: ep_return 18.4  loss 0.021  ·  it 260  steps 64k
+    run  20 rows since the last: ep_return 18.4  loss 0.021  ·  it 260  steps 64k
   ✓ baseline_a3f9c1e7  ok in 3m 12s  → runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a
 ```
 
@@ -438,10 +438,10 @@ is `✗ ... failed after 2.1s (ValueError: bad shape) → .../traceback.txt`,
 printed just before python's own traceback; an interrupted one says so. Like the
 status writes, it is best-effort and never replaces the experiment's exception.
 
-Each checkpoint prints two lines once it is complete (see "Checkpoints"): its
+Each checkpoint prints a line once it is complete (see "Checkpoints"): its
 folder relative to the run dir, how far into the run, the progress and its
-`info`; then the `run` metrics since the last checkpoint — means, and counters
-by their last value. That is runkit's whole report while a run goes: the
+`info`; then one line per metrics stream recorded since the last checkpoint,
+`run` first — means, and counters by their last value. That is runkit's whole report while a run goes: the
 experiment decides the cadence by when it checkpoints, and nothing is printed
 per `record` or per `progress`. A save that fails prints nothing.
 
@@ -596,8 +596,9 @@ info: {ep_return: 20.7}           # ckpt.info (numpy values made plain)
 metrics: {run: 781, eval: 78}     # lines per metrics stream at this point
 progress: 3200000                 # ctx.progress at this point
 total: 10000000
-summary:                          # the `run` rows since the last checkpoint
+summary:                          # per stream: the rows since the last checkpoint
   run: {rows: 20, mean: {ep_return: 18.4, loss: 0.021}, last: {it: 260, steps: 2660000}}
+  reward: {rows: 20, mean: {lin: 0.039, slip: -0.016}, last: {it: 260}}
 ```
 
 Checkpoints sit at the top level, not under `out/`: runkit owns the structure —
@@ -631,21 +632,25 @@ and runkit never touches them.
   which makes "the metrics between two checkpoints" exact, with no clock
   involved (see `--start` / `--end` under "Looking at them").
 - **It summarizes the metrics since the last one.** runkit keeps a running sum
-  per key of the `run` stream as `ctx.record` is called, and at each checkpoint
-  stores `summary: {run: {rows, mean, last}}`, then starts over. Counters —
+  per key of every stream the run records to, as `ctx.record` is called, and at
+  each checkpoint stores `summary: {run: {rows, mean, last}, reward: {...}}` —
+  `run` first, and only streams with rows since the last checkpoint — then
+  starts over. Counters —
   integer-valued and strictly increasing, like `it` or `steps` — are given by
   their last value; everything else by its mean over the values it had (a key
   missing from a row, `None` or NaN is not counted), so a float that improves
   every row is still averaged. runkit's own `_` keys are left out. So every
   checkpoint records how training was going when it was saved, without
-  re-reading the metrics — useful for choosing which one to evaluate. Other
-  streams can join later; the summary is keyed by stream for that.
+  re-reading the metrics — useful for choosing which one to evaluate. Streams
+  written by another process (an `eval` run later) are not in it: they were not
+  recorded while the run went.
 - **It says so in the terminal**, once complete — where it is, how far the run
   got, and the summary:
 
   ```
     ◆ checkpoint  checkpoints/current  at 1h 12m  2.66M / 10M  27%  ep_return=20.7
-      20 rows since the last: ep_return 18.4  loss 0.021  ·  it 260  steps 2.66M
+      run     20 rows since the last: ep_return 18.4  ep_len 500  ·  it 260  steps 2.66M
+      reward  20 rows since the last: lin 0.039  yaw 0.06  slip -0.016  ·  it 260
   ```
 - **Reading back** works on any context: `ctx.checkpoints()`, or
   `load_checkpoints(run_dir)`, gives the complete ones as `Checkpoint`s, oldest
@@ -689,6 +694,25 @@ shows how far it got.
   run records to `run`; anything else names its stream — `eval` records with
   `ctx.record("eval", ...)` to `metrics/eval.jsonl`, so its numbers never mix
   into the training series. `_elapsed_s` there counts from when eval opened the
+  run.
+- **Keep `run` small — a practice, not a rule runkit enforces.** The `run`
+  stream is what gets watched: `runkit metrics follow` follows it by default,
+  each checkpoint's summary puts it first, `info` lists it first. So it should hold a
+  minimal set of values that tell you whether training is going well — the
+  step count, the return, episode length, a task measure or two (`it`, `steps`,
+  `ep_return`, `ep_len`, `vx`). Detail goes to streams of its own, one per kind:
+
+  ```python
+  ctx.record(it=it, steps=n, ep_return=ret, ep_len=length, vx=vx)   # run: to watch
+  ctx.record("reward", it=it, steps=n, **terms)                      # every reward term
+  ctx.record("schedule", it=it, steps=n, **factors)                  # the config over training
+  ```
+
+  Put the x axis (`it`, `steps`) in each stream too, so `--x steps` lines them
+  up in a plot (`runkit metrics plot RUN ep_return reward: lin --x steps`), and
+  a stream reads on its own. A detail stream is one `stream:` away whenever you
+  want it — `runkit metrics RUN reward: --sort std` to compare the terms,
+  `follow RUN reward:` to watch them — without widening every view of the
   run.
 - **The stream is positional-only** (`/`), so a metric that happens to be called
   `stream` is just a value.
@@ -812,7 +836,7 @@ as it is written, from any terminal or machine that sees the run dir:
         1.2s     3      0.25
         1.5s     4       0.2
   ◆ checkpoint  checkpoints/current  at 1.5s  5 / 12  42%
-    5 rows since the last: loss 0.457  ·  it 4
+    run  5 rows since the last: loss 0.457  ·  it 4
         1.8s     5     0.167
   ✓ slow_5a35d412  ok in 3.7s  → runs/slow/latest
 ```
