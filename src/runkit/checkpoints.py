@@ -1,14 +1,25 @@
 """Checkpoints: named, recorded snapshots a live run saves along the way.
 
     with ctx.checkpoint() as ckpt:              # {run dir}/checkpoints/000003/
-        model.save(ckpt.dir / "model.zip")
+        model.save(ckpt.state / "model.zip")
 
     with ctx.checkpoint("best") as ckpt:        # {run dir}/checkpoints/best/
-        model.save(ckpt.dir / "model.zip")
-        ckpt.info["ep_return"] = ret            # saved with it
+        model.save(ckpt.state / "model.zip")
+        ckpt.info["ep_return"] = ret            # saved with it, in checkpoint.yaml
+
+A checkpoint is laid out like a run dir: runkit's own file at the top, the rest
+in named folders --
+
+    checkpoints/best/
+      checkpoint.yaml    runkit's: index, name, time, info, row counts, summary
+      state/             the run body's (`ckpt.state`): what continuing needs
+      eval/              the eval's (`ckpt.eval`), made when one opens it
 
 runkit owns the folder structure -- names, `checkpoint.yaml`, the `latest` link
--- and the body owns the files inside each `ckpt.dir`, as it owns `ctx.out`.
+-- and the body owns `state/`, as it owns `ctx.out`. A branch reads `state/`
+and nothing else. A checkpoint from before `state/` has its files at the top:
+its `state` is the checkpoint folder itself -- as for a body that still saves
+into `ckpt.dir`, whose empty `state/` is dropped when the block exits.
 
 A checkpoint is complete once its `checkpoint.yaml` exists; that file is written
 last, and only when the block exits cleanly. The block writes into a hidden
@@ -30,6 +41,8 @@ from .utils import plain, point_latest
 
 FOLDER = "checkpoints"
 RECORD = "checkpoint.yaml"
+STATE = "state"
+EVAL = "eval"
 _RESERVED = ("latest",)
 
 
@@ -41,6 +54,27 @@ class Checkpoint:
     info: dict = dataclasses.field(default_factory=dict)   # yours; saved to checkpoint.yaml
     metrics: dict = dataclasses.field(default_factory=dict)  # lines per metrics stream when it completed
     summary: dict = dataclasses.field(default_factory=dict)  # per stream: the rows since the last one
+    run: pathlib.Path | None = None                         # the run dir it belongs to
+
+    @property
+    def state(self) -> pathlib.Path:
+        """`{dir}/state` -- what the run body saves, and a branch continues from
+        (as `ctx.out` is `{run dir}/out`). A checkpoint from before `state/`:
+        the checkpoint folder itself."""
+        state = self.dir / STATE
+        return state if state.is_dir() else self.dir
+
+    @property
+    def eval(self) -> pathlib.Path:
+        """`{dir}/eval` -- what an eval of this checkpoint writes. Replaced with
+        the checkpoint: saving one of the same name again empties it."""
+        return self.dir / EVAL
+
+    def is_empty(self):
+        """Nothing saved in `state` -- the body wrote no files."""
+        if (self.dir / STATE).is_dir():
+            return not any((self.dir / STATE).iterdir())
+        return not any(p.name not in (RECORD, EVAL) for p in self.dir.iterdir())
 
 
 class _Saving:
@@ -61,7 +95,8 @@ class _Saving:
         if staging.exists():
             shutil.rmtree(staging)
         staging.mkdir()
-        self.ckpt = Checkpoint(name=name, dir=staging, index=index)
+        (staging / STATE).mkdir()
+        self.ckpt = Checkpoint(name=name, dir=staging, index=index, run=ctx.dir)
         return self.ckpt
 
     def __exit__(self, exc_type, exc, tb):
@@ -88,6 +123,11 @@ class _Saving:
                 ((s, summarize_window(w)) for s, w in ctx._live.windows.items()),
                 key=lambda sw: (sw[0] != "run", sw[0])) if w},
         }
+        state = staging / STATE
+        if not any(state.iterdir()):
+            # nothing in state/: the body saved at the top (`ckpt.dir`, as before
+            # state/ existed) or nothing at all; the folder is then the state
+            state.rmdir()
         (staging / RECORD).write_text(yaml.safe_dump(record, sort_keys=False))
         _swap_in(staging, self.final)
         ctx._live.checkpoints = ckpt.index
@@ -149,7 +189,8 @@ def load_checkpoints(run_dir):
             found.append(Checkpoint(name=rec["name"], dir=d.resolve(), index=rec["index"],
                                     info=rec.get("info") or {},
                                     metrics=rec.get("metrics") or {},
-                                    summary=rec.get("summary") or {}))
+                                    summary=rec.get("summary") or {},
+                                    run=pathlib.Path(run_dir).resolve()))
         except Exception:                                    # noqa: BLE001
             continue
     return sorted(found, key=lambda c: c.index)

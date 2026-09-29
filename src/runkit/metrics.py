@@ -31,21 +31,44 @@ def _check_stream(stream):
                          f"not starting with '.'")
 
 
+def record(path, /, **values):
+    """Append one row of named values to the JSON Lines file `path`:
+
+        record(ckpt.eval / "episodes.jsonl", episode=i, ret=r)
+
+    The raw form of `ctx.record`: no streams, no run -- the file is where it is
+    told (its folder is made). runkit adds `_time`; numpy values are made plain;
+    keys starting with `_` are runkit's and refused. `runkit metrics` reads the
+    file as it is (`runkit metrics info .../episodes.jsonl`).
+    """
+    _check_keys(values, "record")
+    _append_row(pathlib.Path(path), {
+        "_time": datetime.datetime.now().isoformat(timespec="milliseconds"), **plain(values)})
+
+
+def _check_keys(values, what):
+    clash = sorted(k for k in values if k.startswith(RESERVED_PREFIX))
+    if clash:
+        raise ValueError(f"{what}: {clash} -- keys starting with "
+                         f"'{RESERVED_PREFIX}' are runkit's; use other names")
+
+
+def _append_row(path, row):
+    """One whole line, appended: a killed writer loses at most its last line."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a") as f:
+        f.write(json.dumps(row) + "\n")
+
+
 def append(ctx, stream, values):
     """Append one row to `{ctx.dir}/metrics/<stream>.jsonl`."""
     _check_stream(stream)
-    clash = sorted(k for k in values if k.startswith(RESERVED_PREFIX))
-    if clash:
-        raise ValueError(f"ctx.record: {clash} -- keys starting with "
-                         f"'{RESERVED_PREFIX}' are runkit's; use other names")
+    _check_keys(values, "ctx.record")
     t0 = ctx._live.t0 if ctx._live is not None else ctx._opened
     row = {"_time": datetime.datetime.now().isoformat(timespec="milliseconds"),
            "_elapsed_s": round(time.monotonic() - t0, 3) if t0 is not None else None,
            **plain(values)}
-    folder = ctx.dir / FOLDER
-    folder.mkdir(exist_ok=True)
-    with open(folder / f"{stream}.jsonl", "a") as f:
-        f.write(json.dumps(row) + "\n")
+    _append_row(ctx.dir / FOLDER / f"{stream}.jsonl", row)
     if ctx._live is not None:               # counted for checkpoint.yaml
         ctx._live.records[stream] = ctx._live.records.get(stream, 0) + 1
         # summarized at the next checkpoint, every stream the run records
@@ -57,10 +80,25 @@ def append(ctx, stream, values):
                 pass
 
 
+def stream_folder(run_dir):
+    """Where the streams are: a run dir's `metrics/`; any other folder is taken
+    as a folder of streams itself (an eval's `checkpoints/best/eval/`, whose
+    `episodes.jsonl` is stream `episodes`)."""
+    d = pathlib.Path(run_dir)
+    return d / FOLDER if (d / "run_context.yaml").is_file() else d
+
+
+def stream_label(run_dir, stream):
+    """How a stream file is named in output: `metrics/run.jsonl`, `episodes.jsonl`."""
+    folder = stream_folder(run_dir)
+    return f"{folder.name}/{stream}.jsonl" if folder != pathlib.Path(run_dir) else f"{stream}.jsonl"
+
+
 def load_metrics(run_dir, stream="run"):
     """The rows of one stream, in order, as dicts. A line that does not parse
-    (the last one of a killed run, say) is skipped. [] if there is none."""
-    path = pathlib.Path(run_dir) / FOLDER / f"{stream}.jsonl"
+    (the last one of a killed run, say) is skipped. [] if there is none.
+    `run_dir` is a run dir, or a folder of streams (`stream_folder`)."""
+    path = stream_folder(run_dir) / f"{stream}.jsonl"
     if not path.is_file():
         return []
     rows = []
@@ -197,8 +235,8 @@ def _is_number(v):
 
 
 def streams(run_dir):
-    """The metrics streams a run has, by name."""
-    folder = pathlib.Path(run_dir) / FOLDER
+    """The metrics streams a run (or a folder of streams) has, by name."""
+    folder = stream_folder(run_dir)
     return sorted(f.stem for f in folder.glob("*.jsonl")) if folder.is_dir() else []
 
 
@@ -288,7 +326,7 @@ def plot_metrics(run_dir, ys, x=None, out=None, *, rows=None, start=None, end=No
     for stream in dict.fromkeys(s for s, _ in series):
         full[stream] = _columns(load_metrics(run_dir, stream))
         if not full[stream]:
-            raise ValueError(f"plot: no stream {stream!r} in {run_dir / FOLDER} "
+            raise ValueError(f"plot: no stream {stream!r} in {stream_folder(run_dir)} "
                              f"(streams: {', '.join(streams(run_dir)) or 'none'})")
     # a negative start / end counts back from the end of the axis over all series
     x_end = max(np.nanmax(_numeric(c, x or "_line", s)) for s, c in full.items())
@@ -333,7 +371,7 @@ def _plot_all(plt, run_dir, stream, x, out, rows, start, end):
     """Every numeric key of `stream` in its own subplot, against x or the line."""
     full = _columns(load_metrics(run_dir, stream))
     if not full:
-        raise ValueError(f"plot: no stream {stream!r} in {run_dir / FOLDER} "
+        raise ValueError(f"plot: no stream {stream!r} in {stream_folder(run_dir)} "
                          f"(streams: {', '.join(streams(run_dir)) or 'none'})")
     axis_key = x or "_line"
     _numeric(full, axis_key, stream)
@@ -368,7 +406,7 @@ def _plot_all(plt, run_dir, stream, x, out, rows, start, end):
     for i in range(n, nrows * ncols):                     # a hidden panel: label the one above
         axes.flat[i - ncols].set_xlabel(x or "line (record call)", fontsize=8)
         axes.flat[i - ncols].xaxis.set_tick_params(labelbottom=True)
-    fig.suptitle(f"{run_dir.resolve().name} · {FOLDER}/{stream}.jsonl", fontsize=9)
+    fig.suptitle(f"{run_dir.resolve().name} · {stream_label(run_dir, stream)}", fontsize=9)
     return _save(plt, fig, out, run_dir, "all" if stream == "run" else f"{stream}-all",
                  x, rows, start, end)
 
@@ -399,7 +437,7 @@ def _save(plt, fig, out, run_dir, name, x, rows, start, end):
             name += f"_start{start}"
         if end is not None:
             name += f"_end{end}"
-        out = run_dir / FOLDER / f"{_safe(name)}.png"
+        out = stream_folder(run_dir) / f"{_safe(name)}.png"
     out = pathlib.Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()

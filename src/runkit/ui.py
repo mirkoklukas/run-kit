@@ -156,23 +156,28 @@ def _launch_text(launch):
     return " · ".join(parts)
 
 
-def run_started(*, name, run_id, run_dir, tag, changes, n_fields, launch=None):
+def run_started(*, name, run_id, run_dir, tag, changes, n_fields, launch=None,
+                branch=None, against="defaults"):
     """Print the start banner: which run, where it writes, how it was launched,
     what it changes -- a title line, then a label / value block, no frame.
+    `branch`: where a branch starts (`a3f9c1e7:best (3.0M steps)`); its changes
+    are against its parent's config (`against="the parent"`).
 
     Only the config fields that differ from the dataclass defaults are shown
     (`changes`, dotted keys) -- a large config would otherwise fill the screen,
     and the whole of it is in `{run_dir}/config.yaml` anyway.
     """
     rest = n_fields - len(changes)
+    same = "at their defaults" if against == "defaults" else f"as in {against}"
     if not changes:
-        config = Text(f"all {n_fields} fields at their defaults", style="dim")
+        config = Text(f"all {n_fields} fields {same}", style="dim")
     else:
-        note = f"{rest} more at their defaults · " if rest else ""
+        note = f"{rest} more {same} · " if rest else ""
         config = Group(_cfg_block(changes), f"[dim]{note}the full resolved config is "
                                             f"in the run dir's config.yaml[/dim]")
     rows = [("id", run_id), *([("tag", tag)] if tag else []),
             ("dir", short_path(run_dir)),
+            *([("branch", branch)] if branch else []),
             *([("launch", _launch_text(launch))] if launch else []),
             ("config", config)]
     _flush_stdout()

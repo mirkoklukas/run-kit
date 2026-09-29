@@ -8,7 +8,9 @@ Usage:
 verbs: run, eval, viz (as registered on the experiment), root, latest
 
 `<experiment>` is a file (`experiment.py`) or a dotted module
-(`lab.rl_env.test_policy`). `args` are what `python experiment.py <verb> ...`
+(`lab.rl_env.test_policy`). For eval and viz it may be left out when a run dir
+or a checkpoint is named instead (`runkit eval runs/x/latest/checkpoints/best`):
+the run's meta.yaml names its experiment. `args` are what `python experiment.py <verb> ...`
 takes after the verb. The slot between the verb and the experiment is for
 runkit's own options (none yet).
 
@@ -29,7 +31,9 @@ experiment, `runkit root [FOLDER]` prints the root itself, resolved from FOLDER
                                               every key, a subplot each)
 
 PATH is a run dir, its metrics/ folder, or a stream file (metrics/eval.jsonl);
-default the current folder. KEY is `key` (of the current stream: `run`, or the
+or any folder of .jsonl files, or one such file (an eval's
+checkpoints/best/eval/episodes.jsonl) -- each file a stream. Default: the
+current folder. KEY is `key` (of the current stream: `run`, or the
 file's), `stream:key`, `loss/` or 'loss/*' (every loss/... key), or a lone `stream:` that
 switches the stream for the keys after it -- or, with none after it, means all
 of it: `eval: ret len`, `loss eval: ret`, `eval:`.
@@ -95,9 +99,36 @@ def main(argv=None):
     if not rest:
         sys.exit(f"usage: runkit {verb} <experiment> ...")
     target, args = rest[0], [*rest[1:], *passed]
+    if verb in ("eval", "viz") and pathlib.Path(target).is_dir():
+        # a run dir or a checkpoint, and no experiment: the run says which
+        target, args = _experiment_of(target), rest
     from .launch import prepare
     prepare(target, argv)                   # experiment.toml's extras / vars, before the import
     return dispatch(_find_experiment(_import(target), target), [verb, *args])
+
+
+def _experiment_of(path):
+    """The experiment a run dir (or a checkpoint of one) was made by, as a target
+    to import: its recorded module when it can be found from here -- so its
+    package's relative imports work -- else its script."""
+    from .launch import experiment_file
+    from .runs import run_dir_of
+    from .utils import load_yaml
+    run_dir = run_dir_of(path)
+    if run_dir is None:
+        sys.exit(f"{path} is not in a run dir (no run_context.yaml above it); "
+                 f"name the experiment: runkit eval <experiment> [CHECKPOINT]")
+    try:
+        meta = load_yaml(run_dir / "meta.yaml")
+    except ValueError:
+        meta = {}
+    module, script = meta.get("module"), meta.get("script")
+    if module and experiment_file(module) is not None:
+        return module
+    if script and pathlib.Path(script).is_file():
+        return script
+    sys.exit(f"{ui.short_path(run_dir)}: its experiment ({module or script or 'unrecorded'}) "
+             f"is not found from here; name it: runkit eval <experiment> {path}")
 
 
 def root_cmd(argv):
@@ -171,17 +202,18 @@ def _metrics_path(argv, usage):
         target = pathlib.Path.cwd()
     stream = None
     if target.is_file():
-        if target.suffix != ".jsonl" or target.parent.name != "metrics":
-            sys.exit(f"{target} is not a metrics stream (a run's metrics/<stream>.jsonl)"
-                     f"\n\n{usage}")
-        stream, run_dir = target.stem, target.parent.parent
-    elif target.name == "metrics" and (target.parent / "run_context.yaml").is_file():
-        run_dir = target.parent
+        if target.suffix != ".jsonl":
+            sys.exit(f"{target} is not a stream (a .jsonl file, e.g. a run's "
+                     f"metrics/<stream>.jsonl)\n\n{usage}")
+        stream, run_dir = target.stem, target.parent
     else:
         run_dir = target
-    if not (run_dir / "run_context.yaml").is_file():
-        sys.exit(f"{run_dir} is not a run dir (no run_context.yaml); pass one, its "
-                 f"metrics/ folder, or a stream file, e.g. runs/<name>/latest\n\n{usage}")
+    if run_dir.name == "metrics" and (run_dir.parent / "run_context.yaml").is_file():
+        run_dir = run_dir.parent                 # a run's metrics/: the run
+    if not (run_dir / "run_context.yaml").is_file() and not any(run_dir.glob("*.jsonl")):
+        sys.exit(f"{run_dir} is not a run dir (no run_context.yaml) and holds no "
+                 f".jsonl streams; pass a run dir, its metrics/ folder, or a stream "
+                 f"file, e.g. runs/<name>/latest\n\n{usage}")
     return run_dir, stream, rest
 
 
@@ -262,7 +294,7 @@ def _by_stream(series):
 def _metrics_info(run_dir, series, opts, usage):
     """Tables of keys: every stream (`run` first) with nothing named, else the
     streams named, each with its keys."""
-    from .metrics import FOLDER, streams, summarize_metrics
+    from .metrics import stream_folder, stream_label, streams, summarize_metrics
     have = streams(run_dir)
     wanted = _by_stream(series) or {s: [""] for s in have}
     order = sorted(wanted, key=lambda s: (s != "run", s))
@@ -272,7 +304,7 @@ def _metrics_info(run_dir, series, opts, usage):
         return {}
     missing = [s for s in order if s not in have]
     if missing:
-        sys.exit(f"no metrics stream {missing[0]!r} in {run_dir / FOLDER} "
+        sys.exit(f"no metrics stream {missing[0]!r} in {stream_folder(run_dir)} "
                  f"(streams: {', '.join(have)})")
     tables, failed = {}, {}
     for s in order:
@@ -289,18 +321,17 @@ def _metrics_info(run_dir, series, opts, usage):
         tables = {s: _sorted_rows(rows, opts["sort"], usage) for s, rows in tables.items()}
     for s in order:
         if s in tables:
-            _print_stream(s, tables[s])
+            _print_stream(stream_label(run_dir, s), tables[s])
         else:
-            ui.out.print(f"\n{FOLDER}/{s}.jsonl  [dim]{failed[s]}[/dim]")
+            ui.out.print(f"\n{stream_label(run_dir, s)}  [dim]{failed[s]}[/dim]")
     return tables
 
 
-def _print_stream(stream, rows):
+def _print_stream(label, rows):
     """One stream's keys as a table under a `metrics/<stream>.jsonl  N rows` line."""
     from rich.markup import escape
-    from .metrics import FOLDER
     n = max((r["rows"] for r in rows), default=0)
-    ui.out.print(f"\n{FOLDER}/{stream}.jsonl  {n} rows")
+    ui.out.print(f"\n{label}  {n} rows")
     names = ("key", "rows", "last", "min", "max", "mean", "std", "trend")
     cells = [[r["key"], str(r["rows"]), _fmt(r["last"]), _fmt(r["min"]), _fmt(r["max"]),
               _fmt(r["mean"]), _fmt(r["std"]), _trend_text(r)] for r in rows]
@@ -369,6 +400,8 @@ def _metrics_follow(run_dir, series, opts, usage):
     """Rows of one stream as they are written, until the run ends."""
     from .follow import follow
     from .metrics import FOLDER, parse_rows
+    if not (run_dir / "run_context.yaml").is_file():
+        sys.exit(f"follow needs a run dir: {run_dir} is a folder of streams\n\n{usage}")
     wanted = _by_stream(series) or {"run": [""]}
     if len(wanted) > 1:
         sys.exit(f"follow takes one stream (got {', '.join(wanted)})\n\n{usage}")

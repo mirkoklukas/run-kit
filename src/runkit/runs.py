@@ -82,8 +82,8 @@ def select_run(root, name, which=None, *, require_ok=False):
             kind = "finished (ok) runs" if require_ok else "runs"
             raise RunNotFound(f"no {kind} of {name!r} under {base}")
         run_dir = dirs[-1]
-    elif pathlib.Path(which).is_dir():
-        run_dir = pathlib.Path(which).resolve()
+    elif pathlib.Path(which).is_dir():            # a run dir, or a folder in one
+        run_dir = run_dir_of(which) or pathlib.Path(which).resolve()
     else:
         which = str(which)
         matches = [d for d in run_dirs(root, name)
@@ -124,3 +124,66 @@ def load_run(run_dir, cfg_cls):
     elif (run_dir / "retval.npy").is_file():
         retval = np.load(run_dir / "retval.npy")
     return Run(config=cfg, context=ctx, retval=retval)
+
+
+def checkpoint_at(path):
+    """The complete checkpoint a folder is, or None: `path` must hold a
+    `checkpoint.yaml` (`checkpoints/latest` resolves to the checkpoint it names)."""
+    from .checkpoints import RECORD, load_checkpoints
+    d = pathlib.Path(path)
+    if not (d / RECORD).is_file():
+        return None
+    d = d.resolve()
+    found = [c for c in load_checkpoints(d.parent.parent) if c.dir == d]
+    return found[0] if found else None
+
+
+def run_dir_of(path):
+    """The run dir a path is in -- the run dir itself, a checkpoint of it, or
+    anything below either -- or None."""
+    d = pathlib.Path(path).resolve()
+    for candidate in (d, *d.parents):
+        if (candidate / "run_context.yaml").is_file():
+            return candidate
+    return None
+
+
+def select_checkpoint(root, name, which=None):
+    """Pick one complete checkpoint of experiment `name`.
+
+    which=None        -> the latest checkpoint of the latest run that has one
+    a checkpoint dir  -> that one (`.../checkpoints/best`, `.../checkpoints/latest`)
+    RUN[:CHECKPOINT]  -> RUN as for `select_run` (a run dir or a hex prefix), and
+                         the checkpoint of that name -- by default its latest
+                         (the highest index)
+
+    Raises `RunNotFound` if there is no such checkpoint.
+    """
+    from .checkpoints import load_checkpoints
+    if which is None:
+        for run_dir in reversed(run_dirs(root, name)):
+            ckpts = load_checkpoints(run_dir)
+            if ckpts:
+                select_run(root, name, run_dir)            # of this experiment
+                return ckpts[-1]
+        raise RunNotFound(f"no run of {name!r} under {pathlib.Path(root) / name} "
+                          f"has a complete checkpoint")
+    which = str(which)
+    ckpt = checkpoint_at(which) if pathlib.Path(which).is_dir() else None
+    if ckpt is not None:
+        select_run(root, name, ckpt.run)                   # of this experiment
+        return ckpt
+    run, sep, ckpt_name = which.rpartition(":")
+    if not sep or "/" in ckpt_name or not run:
+        run, ckpt_name = which, None
+    run_dir = select_run(root, name, run)
+    ckpts = load_checkpoints(run_dir)
+    if not ckpts:
+        raise RunNotFound(f"{run_dir.name} has no complete checkpoint")
+    if ckpt_name in (None, "latest"):
+        return ckpts[-1]
+    found = [c for c in ckpts if c.name == ckpt_name]
+    if not found:
+        names = ", ".join(c.name for c in ckpts)
+        raise RunNotFound(f"{run_dir.name} has no checkpoint {ckpt_name!r} (it has: {names})")
+    return found[0]

@@ -76,6 +76,30 @@ def load_yaml(path):
     return data or {}
 
 
+def save_config(cfg, path):
+    """Write a config to a yaml file, atomically (a temp file, then a rename):
+
+        save_config(schedule(steps), ckpt.state / "config.yaml")
+
+    As a run's own `config.yaml` is written; `load_config` reads it back."""
+    path = pathlib.Path(path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(yaml.safe_dump(serialize_cfg(cfg), sort_keys=False))
+    os.replace(tmp, path)
+
+
+def load_config(cls, path):
+    """The config in a yaml file, built as `cls` -- the way a run's config is
+    built (nested configs, dict fields, tuples, `1e-4` as a float):
+
+        cfg = load_config(PolicyCfg, ckpt.state / "config.yaml")
+
+    A key `cls` does not have is an error; a field the file lacks takes its
+    default."""
+    from .config import build_cfg
+    return build_cfg(cls, load_yaml(path))
+
+
 def serialize_cfg(cfg):
     """Convert a cfg into a plain dict for the frozen config.yaml."""
     if dataclasses.is_dataclass(cfg) and not isinstance(cfg, type):
@@ -111,17 +135,19 @@ def _defaults(cls):
     return out
 
 
-def config_changes(cfg):
+def config_changes(cfg, base=None):
     """(the fields of `cfg` that differ from its defaults, how many fields in all).
 
     Flattened to dotted keys (`optim.lr`), as they would be set on the command
     line. A field with no default always counts as changed -- somebody set it.
+    `base`: a config of the same class to compare with instead of the defaults
+    (a branch's parent).
     """
     if not (dataclasses.is_dataclass(cfg) and not isinstance(cfg, type)):
         flat = _flat(serialize_cfg(cfg))
         return flat, len(flat)
     values = _flat(dataclasses.asdict(cfg))
-    defaults = _flat(_defaults(type(cfg)))
+    defaults = _flat(dataclasses.asdict(base) if base is not None else _defaults(type(cfg)))
     changed = {k: v for k, v in values.items() if k not in defaults or defaults[k] != v}
     return changed, len(values)
 

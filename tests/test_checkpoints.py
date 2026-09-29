@@ -32,7 +32,7 @@ def test_counter_names_record_and_latest(tmp_path):
     def body(cfg: Cfg, ctx: RunContext):
         for i in range(cfg.n):
             with ctx.checkpoint() as ckpt:
-                (ckpt.dir / "w.txt").write_text(str(i))
+                (ckpt.state / "w.txt").write_text(str(i))
                 ckpt.info["i"] = i
         return [c.name for c in ctx.checkpoints()]
 
@@ -43,34 +43,35 @@ def test_counter_names_record_and_latest(tmp_path):
     assert rec["index"] == 3 and rec["name"] == "000003" and rec["run"] == r.context.id
     assert rec["info"] == {"i": 2} and rec["elapsed_s"] >= 0 and rec["time"]
     assert (folder / "latest").resolve() == (folder / "000003").resolve()
-    assert (folder / "000003" / "w.txt").read_text() == "2"
+    assert (folder / "000003" / "state" / "w.txt").read_text() == "2"   # the body's: state/
     assert not [p for p in folder.iterdir() if p.name.startswith(".")]    # no leftovers
 
 
 def test_a_repeated_name_replaces_and_takes_a_new_index(tmp_path):
     def body(cfg: Cfg, ctx: RunContext):
         with ctx.checkpoint("best") as ckpt:
-            (ckpt.dir / "w.txt").write_text("first")
+            (ckpt.state / "w.txt").write_text("first")
         with ctx.checkpoint() as ckpt:                        # 000002
             pass
         with ctx.checkpoint("best") as ckpt:
-            (ckpt.dir / "new.txt").write_text("second")
+            (ckpt.state / "new.txt").write_text("second")
         return [(c.name, c.index) for c in ctx.checkpoints()]
 
     r = _go(_exp(body), tmp_path)
     assert r.retval == [("000002", 2), ("best", 3)]          # ordered by index, not name
     best = r.context.dir / "checkpoints" / "best"
-    assert sorted(p.name for p in best.iterdir()) == ["checkpoint.yaml", "new.txt"]
+    assert sorted(p.name for p in best.iterdir()) == ["checkpoint.yaml", "state"]
+    assert [p.name for p in (best / "state").iterdir()] == ["new.txt"]      # the first's gone
     assert (r.context.dir / "checkpoints" / "latest").resolve() == best.resolve()
 
 
 def test_a_failed_save_records_nothing_and_keeps_the_old_one(tmp_path):
     def body(cfg: Cfg, ctx: RunContext):
         with ctx.checkpoint("best") as ckpt:
-            (ckpt.dir / "w.txt").write_text("good")
+            (ckpt.state / "w.txt").write_text("good")
         try:
             with ctx.checkpoint("best") as ckpt:
-                (ckpt.dir / "w.txt").write_text("half")
+                (ckpt.state / "w.txt").write_text("half")
                 raise OSError("disk full")
         except OSError:
             pass
@@ -79,19 +80,21 @@ def test_a_failed_save_records_nothing_and_keeps_the_old_one(tmp_path):
     r = _go(_exp(body), tmp_path)
     assert [c.name for c in r.retval] == ["best"] and r.retval[0].index == 1
     folder = r.context.dir / "checkpoints"
-    assert (folder / "best" / "w.txt").read_text() == "good"
+    assert (folder / "best" / "state" / "w.txt").read_text() == "good"
     assert not [p for p in folder.iterdir() if p.name.startswith(".")]
 
 
 def test_ckpt_dir_is_the_final_folder_after_the_block(tmp_path):
     def body(cfg: Cfg, ctx: RunContext):
         with ctx.checkpoint("x") as ckpt:
-            during = ckpt.dir
-        return during, ckpt.dir
+            during, state = ckpt.dir, ckpt.state
+        return during, ckpt.dir, state
 
-    during, after = _go(_exp(body), tmp_path).retval
+    during, after, state = _go(_exp(body), tmp_path).retval
     assert during.name.startswith(".x.staging")                # hidden while being written
     assert after.name == "x" and (after / "checkpoint.yaml").is_file()
+    assert state == during / "state"                           # made for the body ...
+    assert not (after / "state").exists()                      # ... and dropped, left empty
 
 
 def test_numpy_info_is_saved_as_plain_values(tmp_path):

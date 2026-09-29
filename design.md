@@ -346,8 +346,8 @@ form a pipeline over a run dir:
 
 | verb | what it does | argv after the verb | the body writes |
 | ---- | ------------ | ------------------- | --------------- |
-| `run` | creates a run dir | `[config.yaml] [key=value ...] [--tag] [--root]` | `out/` |
-| `eval` | processes what a run wrote | `[RUN] [--root]` | e.g. `out/eval/` |
+| `run` | creates a run dir | `[config.yaml] [key=value ...] [--tag] [--root] [--branch]` | `out/` |
+| `eval` | evaluates a checkpoint of a run | `[CHECKPOINT] [--root]` | `checkpoints/<name>/eval/` |
 | `viz` | presents a run: "look here first" | `[RUN] [--root]` | e.g. `out/figures/`, the terminal |
 
 `viz` is the experimenter's answer to "how do I check how this went?". Someone
@@ -363,14 +363,59 @@ runs/baseline/...  a run dir (`runs/baseline/latest` works)
 a3f9               a hex prefix of the run's id -- the {hex8} in its dir name
 ```
 
-`eval` skips runs that failed or are still going, since there is nothing to
-evaluate; `viz` does not, since a failed run is exactly when you want a look.
-A run dir of a different experiment is refused.
+A run dir of a different experiment is refused. A path inside a run dir (one
+of its checkpoints, say) means that run.
 
-`eval` and `viz` get the same `(cfg, ctx)` as the run did: the config thawed
-from `config.yaml` — no `key=value`, the config is the one the run was made
-with — and the run's `RunContext`. Their `cfg` annotation says which class to
-thaw into; without one, the run's is used.
+`viz` gets the same `(cfg, ctx)` as the run did: the config thawed from
+`config.yaml` — no `key=value`, the config is the one the run was made with —
+and the run's `RunContext`. Its `cfg` annotation says which class to thaw into;
+without one, the run's is used. It opens runs that failed or are still going
+too: a failed run is exactly when you want a look.
+
+**`eval` evaluates a checkpoint**, not a run, and gets only that:
+
+```python
+@exp.eval
+def evaluate(ckpt):
+    cfg = load_config(PolicyCfg, ckpt.state / "config.yaml")   # if the run saved one
+    model = PPO.load(ckpt.state / "model.zip")
+    ...
+    np.savez(ckpt.eval / "rollout.npz", ...)
+    record(ckpt.eval / "episodes.jsonl", episode=i, ret=r)
+```
+
+`CHECKPOINT` picks one:
+
+```
+(nothing)                       the latest checkpoint of the latest run that has one
+runs/x/latest/checkpoints/best  a checkpoint dir (`.../checkpoints/latest` works)
+runs/x/latest, a3f9             a run: its latest checkpoint
+a3f9:best, runs/x/latest:best   a run and the checkpoint of that name
+```
+
+A run that failed or is still going is evaluated at its latest complete
+checkpoint; a run with none is skipped (by default) or refused (when named).
+The body reads `ckpt.state` and writes into `ckpt.eval` — the checkpoint's
+`eval/`, made for it — its files and its records alike (`runkit.record`, see
+"Progress and metrics"), so an eval's results sit next to the state they came
+from. A checkpoint saved again under its name (`current`) replaces the whole
+folder, `eval/` with it: the eval described a state that is gone. There is no
+`ctx`: what an eval writes is the checkpoint's. An eval body with a `cfg`
+parameter — `evaluate(cfg, ctx)`, from before — still gets a run instead, as
+`viz` does, and skips runs that are not `ok`.
+
+**`runkit eval <checkpoint>` needs no experiment.** Named a run dir or a
+checkpoint in place of the experiment, `runkit eval` (and `viz`) find it in the
+run's `meta.yaml` — its `module`, when that can be imported from here, else its
+`script` — and launch it as usual (`experiment.toml`'s extras included):
+
+```bash
+runkit eval runs/test_policy/latest/checkpoints/current
+runkit viz runs/test_policy/latest
+```
+
+Either way the experiment's code is as it is now, not as it was when the run
+trained.
 
 **One experiment per file.** A file holds one `Experiment`, and its roles are
 registered on it, once each. That is what makes the file a complete answer to
@@ -577,10 +622,10 @@ everything, and a run can be evaluated or resumed before it ends:
 def run(cfg: Config, ctx: RunContext):
     for it in ...:
         with ctx.checkpoint() as ckpt:             # checkpoints/000003/
-            model.save(ckpt.dir / "model.zip")
+            model.save(ckpt.state / "model.zip")
         if ret > best:
             with ctx.checkpoint("best") as ckpt:   # checkpoints/best/
-                model.save(ckpt.dir / "model.zip")
+                model.save(ckpt.state / "model.zip")
                 ckpt.info["ep_return"] = ret       # saved with it
 ```
 
@@ -593,7 +638,13 @@ class Checkpoint:
     info: dict       # yours; saved to checkpoint.yaml when the block exits
     metrics: dict    # lines each metrics stream had when it completed (runkit's)
     summary: dict    # per stream: the rows since the last checkpoint (runkit's)
+    run: Path        # the run dir it belongs to
+    state: Path      # {dir}/state: the body's -- what continuing needs
+    eval: Path       # {dir}/eval: an eval's
 ```
+
+`ckpt.dir` is the checkpoint folder and `ckpt.state` is `ckpt.dir / "state"`,
+as `ctx.dir` is the run dir and `ctx.out` is `ctx.dir / "out"`.
 
 `ctx.checkpoint(name=None)` is the only way to make one. The name is free-form —
 the counter by default, or what suits the experiment (`f"{step}"`, `"best"`) —
@@ -607,8 +658,11 @@ runs/test_policy/2026-09-25_10-02-11_a3f9c1e7/
     ├── 000001/
     ├── 000002/
     ├── best/
-    │   ├── model.zip          the body's: written into ckpt.dir
-    │   └── checkpoint.yaml    runkit's: written when the block exits
+    │   ├── checkpoint.yaml    runkit's: written when the block exits
+    │   ├── state/             the run body's: written into ckpt.state
+    │   │   └── model.zip
+    │   └── eval/              an eval's: written into ckpt.eval
+    │       └── episodes.jsonl
     └── latest -> best         runkit's: the highest index
 ```
 
@@ -629,10 +683,34 @@ summary:                          # per stream: the rows since the last checkpoi
 ```
 
 Checkpoints sit at the top level, not under `out/`: runkit owns the structure —
-names, `checkpoint.yaml`, `latest` — and the body owns the files inside each
-`ckpt.dir`, the way it owns `ctx.out`. So `ctx.checkpoint` stays optional: an
-experiment that would rather manage its own checkpoints writes them under `out/`,
-and runkit never touches them.
+names, `checkpoint.yaml`, `latest` — and the body owns `state/` in each, the way
+it owns `ctx.out`; runkit makes `state/` when the block starts and never looks
+inside. A checkpoint is laid out like a run dir: runkit's file at the top, the
+rest in named folders. So `ctx.checkpoint` stays optional: an experiment that
+would rather manage its own checkpoints writes them under `out/`, and runkit
+never touches them. A checkpoint from before `state/` has the body's files at
+its top; its `ckpt.state` is the checkpoint folder itself, so it still branches
+and evaluates. The same holds for a body that still saves into `ckpt.dir`: a
+`state/` left empty is dropped when the block exits.
+
+**`info` is small scalars that describe the checkpoint.** The body fills the
+dict (`ckpt.info.update(steps=...)`); runkit writes it into `checkpoint.yaml`
+with its own record when the block exits. runkit shows it (the checkpoint line,
+a branch's banner) and never requires a key; the body may read it back on a
+branch (`branch.info["steps"]`). What continuing needs beyond such scalars goes
+in `state/`.
+
+**A config that changes over training** (a schedule) is the body's to save if
+it needs it — the run's `config.yaml` holds the one it started with:
+
+```python
+save_config(schedule(steps), ckpt.state / "config.yaml")   # atomic yaml
+cfg = load_config(PolicyCfg, ckpt.state / "config.yaml")   # the typed config back
+```
+
+`load_config` builds the class the way a run's config is built (nested
+configs, dict fields, tuples, `1e-4` as a float); a key the class no longer has
+is an error, a field it gained takes its default.
 
 - **Complete means recorded.** The block writes into a hidden staging folder
   (`checkpoints/.best.staging-3/` — that is `ckpt.dir` during the block); when
@@ -681,7 +759,78 @@ and runkit never touches them.
   ```
 - **Reading back** works on any context: `ctx.checkpoints()`, or
   `load_checkpoints(run_dir)`, gives the complete ones as `Checkpoint`s, oldest
-  first — for an `eval` to pick one, or a run to resume from.
+  first; `select_checkpoint(root, name, which)` picks one as `eval` and
+  `--branch` do.
+
+### Branching: a new run from a checkpoint
+
+Continue an earlier run — with a change, or none — as a new run, starting from
+one of its checkpoints:
+
+```bash
+runkit run lab.rl_env.test_policy --branch a3f9:best env.w_support=10
+runkit run lab.rl_env.test_policy --branch runs/test_policy/latest      # just continue
+```
+```python
+run(cfg, branch="a3f9:best")                  # from python: cfg as given
+```
+
+This covers changing a run midway (stop it, branch from its latest checkpoint
+with the new value — at most one checkpoint interval lost), continuing one that
+crashed or was stopped, and trying variants from a common point. A run is never
+modified after the fact: every run is described by its own `config.yaml` and,
+for a branch, its parent.
+
+`--branch` names a checkpoint as `eval` does — `RUN[:CHECKPOINT]` or a
+checkpoint dir — by default the run's latest. runkit then:
+
+- makes **a new run dir**; the parent is not touched;
+- builds **the config from the parent's `config.yaml`**, not the class
+  defaults, with the command line (a config yaml, `key=value`) on top — a branch
+  states only what differs, and the banner shows the differences against the
+  parent (`1 more as in the parent`);
+- records **the lineage in `meta.yaml`** —
+  `branch: {run: test_policy_a3f9c1e7, dir: ..., checkpoint: best, index: 12, steps: 3000000}`
+  (`steps` if the checkpoint's `info` has it) — so a run's history can be
+  traced back, branch by branch;
+- shows **a banner line**: `branch  a3f9c1e7:best (3.0M steps)`;
+- hands the body **the checkpoint as its `branch` argument**:
+
+```python
+@exp.run
+def run(cfg: PolicyCfg, ctx: RunContext, branch=None):
+    ...
+    if branch:
+        model = PPO.load(branch.state / "model.zip", env=venv)
+        venv = VecNormalize.load(branch.state / "vecnormalize.pkl", venv)
+        start = branch.info["steps"]
+    model.learn(total_timesteps=cfg.steps - start, reset_num_timesteps=False)
+```
+
+`branch` is the same `Checkpoint` `ctx.checkpoint` gives when saving: what the
+body wrote into `ckpt.state` and `ckpt.info`, it reads back from `branch.state`
+and `branch.info`. runkit passes it only to a body that declares the parameter
+(`None` for a fresh run); the others are called `run(cfg, ctx)` as always.
+
+**The contract is a handshake.** runkit hands over a checkpoint; the experiment
+has to have saved enough in it to continue. Only the experiment knows what
+"enough" is, so runkit cannot check it — it is a practice: *a checkpoint holds
+what continuing needs*. runkit refuses the obvious slips, before the run starts:
+
+- a body without a `branch` parameter (“run takes no `branch`: it can't
+  continue from a checkpoint”) — declaring it is the experiment's side of the
+  handshake, and it shows in the signature;
+- a checkpoint whose `state/` is empty — the body never saved anything;
+- a checkpoint that is not there, or a run with none.
+
+The config and the step count: the parent's `config.yaml` holds a schedule's
+*spec* (control-kit's `_schedule`), and what a schedule gives is a function of
+the step count, which the checkpoint's `info` has. A branch that continues the
+step count continues its schedules where they were; one that changes a
+schedule's parameters moves to what the new one gives at that step.
+
+A branch records its own streams from its first row; its step count continues
+the parent's, so the two plot on one axis with `--x steps`.
 
 ### Progress and metrics
 
@@ -792,6 +941,14 @@ running run:
 | `ctx.record("eval", **values)` | yes | yes |
 | `ctx.record("run", **values)` | yes | error: `run` is the run's own |
 
+**`record(path, **values)`**, from `runkit`, is the raw form: one json line
+appended to the file it is given (its folder made), with `_time` added, numpy
+values made plain, and `_` keys refused — no streams, no run. It is how an eval
+records into its checkpoint (`record(ckpt.eval / "episodes.jsonl", ...)`), and
+works anywhere else a file of rows is wanted; `ctx.record` is the same with the
+run's `metrics/<stream>.jsonl`, `_elapsed_s`, the checkpoint summaries and
+`--follow` on top.
+
 Why standardize metrics at all: they are the one output a generic tool can read
 without knowing the experiment — comparing a sweep, or "final return per run"
 in a future `runkit ls` — where otherwise each experiment writes its own format.
@@ -824,7 +981,10 @@ run dir or a key; without one it is `info`, the command typed most.
 (`metrics/eval.jsonl`, which also sets the stream); default the current folder,
 read the same way. The run dir is what the commands need — `follow` reads
 `status.yaml`, `--start best` reads `checkpoints/` — so the other two resolve to
-it.
+it. Any other folder is taken as a folder of streams, each `.jsonl` file one —
+an eval's `checkpoints/best/eval/`, whose `episodes.jsonl` is stream `episodes`
+(`runkit metrics info .../eval/episodes.jsonl`); `info` and `plot` work on it,
+`follow` needs a run dir.
 
 **KEYs** name what to look at:
 
@@ -1054,11 +1214,12 @@ Both of the outcome writers are best-effort, for a sharper reason than the
 retval dump: they run with the experiment's exception in flight, and must never
 replace it with one of runkit's own.
 
-For `eval` and `viz` there is nothing to create: argv names a run (`RUN`), the
-wrapper picks the run dir (`select_run`), rebuilds its `Run` (`load_run`) and
-calls the body with its config and a context that is not live. runkit records
-nothing about the call itself; the body's output goes under `ctx.out`, and its
-numbers, if any, to a metrics stream it names (`ctx.record("eval", ...)`).
+For `viz` there is nothing to create: argv names a run (`RUN`), the wrapper
+picks the run dir (`select_run`), rebuilds its `Run` (`load_run`) and calls the
+body with its config and a context that is not live. For `eval`, argv names a
+checkpoint (`select_checkpoint`), the wrapper makes its `eval/` and calls the
+body with the `Checkpoint`. runkit records nothing about either call itself;
+the body's output goes under `ctx.out` or `ckpt.eval`.
 
 ### Run dir naming
 

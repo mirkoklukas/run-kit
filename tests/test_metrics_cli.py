@@ -367,8 +367,28 @@ def test_path_can_be_the_metrics_folder_or_a_stream_file(run_dir, capsys):
     assert list(tables) == ["eval"] and [r["key"] for r in tables["eval"]] == ["ret"]
     png = cli.main(["metrics", "plot", str(run_dir / "metrics" / "eval.jsonl")])
     assert png.name == "eval-all_vs_line.png"
-    with pytest.raises(SystemExit, match="is not a metrics stream"):
+    with pytest.raises(SystemExit, match="is not a stream"):
         cli.main(["metrics", str(run_dir / "config.yaml")])
+
+
+def test_any_folder_of_streams_or_jsonl_file(tmp_path, capsys):
+    """Outside a run dir -- an eval's `checkpoints/best/eval/`, say -- a folder's
+    .jsonl files are its streams, and one file is one stream."""
+    from runkit import record
+    folder = tmp_path / "eval"
+    for i in range(3):
+        record(folder / "episodes.jsonl", episode=i, ret=float(i))
+    tables = cli.main(["metrics", str(folder)])
+    assert list(tables) == ["episodes"] and {r["key"] for r in tables["episodes"]} == {"_time", "episode", "ret"}
+    assert "episodes.jsonl  3 rows" in capsys.readouterr().out
+    tables = cli.main(["metrics", str(folder / "episodes.jsonl"), "ret"])
+    assert tables["episodes"][0]["last"] == 2.0
+    png = cli.main(["metrics", "plot", str(folder / "episodes.jsonl")])
+    assert png.parent == folder
+    with pytest.raises(SystemExit, match="follow needs a run dir"):
+        cli.main(["metrics", "follow", str(folder)])
+    with pytest.raises(SystemExit, match="holds no .jsonl"):
+        cli.main(["metrics", str(tmp_path / "eval" / "..")])  # nothing here but a folder
 
 
 def test_info_shows_several_streams_and_plot_mixes_them(run_dir, capsys):

@@ -6,11 +6,21 @@
 - [x] **checkpoint callback and organization** — built: `with ctx.checkpoint(name=None)
   as ckpt:` -> `{run dir}/checkpoints/<name>/` plus `checkpoint.yaml` and a `latest`
   link; `checkpoint: checkpoints/<name>` in `status.yaml`; `ctx.checkpoints()` /
-  `load_checkpoints` read them back; `ctx.live`. Open: retention, eval of a
-  not-`ok` run from its latest checkpoint (proposals.md, "Checkpoints: open").
-- [x] **eval and visualization** — built as `@exp.eval` / `@exp.viz`. Left: eval's
-  own parameters, and whether a loaded `Run` carries `status` (proposals.md,
-  "Open between the proposals").
+  `load_checkpoints` read them back; `ctx.live`. A checkpoint's `state/` (the
+  body's) and `eval/` (an eval's). Open: retention (proposals.md, "Checkpoints:
+  open").
+- [x] **eval and visualization** — built as `@exp.eval` / `@exp.viz`; eval takes a
+  checkpoint, `evaluate(ckpt)`, writing into its `eval/`, and `runkit eval
+  <checkpoint>` finds the experiment itself. Left: eval's own parameters, and
+  whether a loaded `Run` carries `status` (proposals.md, "Open between the
+  proposals").
+- [x] **branching** — `runkit run EXP --branch RUN[:CHECKPOINT]`: a new run from a
+  checkpoint, on the parent's config, lineage in `meta.yaml`; the body gets it as
+  `run(cfg, ctx, branch=None)`. `runkit.record(path, ...)`, `save_config` /
+  `load_config`. Open: lineage plots, an unread-branch warning, a round-trip
+  check (proposals.md, "Branching and checkpoint eval: open"). control-kit's
+  `test_policy` still saves at the checkpoint's top and evaluates `(cfg, ctx)`:
+  moving it to `ckpt.state`, `branch` and `evaluate(ckpt)` is its own change.
 - [x] **progress and metrics** — built: `ctx.progress(n=None, /, *, total=None)` ->
   `progress` / `total` in `status.yaml`; `ctx.record(stream=None, /, **values)` ->
   `metrics/<stream>.jsonl`, read with `load_metrics`; `ctx.live`. Open: marking

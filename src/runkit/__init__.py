@@ -11,12 +11,14 @@ Two disjoint namespaces: config (the "what") via `key=value`; staging (the
 "how/where") via `--flags` (`--tag`, `--root`). See design.md.
 """
 from .exp import Experiment, experiment, Run, RunContext, init_run
-from .runs import load_run, select_run
+from .runs import load_run, select_checkpoint, select_run
 from .checkpoints import Checkpoint, load_checkpoints
-from .metrics import compile_metrics, load_metrics, plot_metrics
+from .metrics import compile_metrics, load_metrics, plot_metrics, record
 from .autocli import main
 from .config import random_seed
+from .utils import load_config, save_config
 
 __all__ = ["Experiment", "experiment", "Run", "RunContext", "init_run",
-           "load_run", "select_run", "Checkpoint", "load_checkpoints",
-           "load_metrics", "compile_metrics", "plot_metrics", "random_seed", "main"]
+           "load_run", "select_run", "select_checkpoint", "Checkpoint",
+           "load_checkpoints", "load_metrics", "compile_metrics", "plot_metrics",
+           "record", "random_seed", "save_config", "load_config", "main"]

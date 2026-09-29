@@ -5,7 +5,8 @@ Shared by `python experiment.py ...` and `runkit <verb> experiment.py ...`
 that verb's arguments:
 
   run   [config.yaml] [key=value ...] [--tag=..] [--root=..]   -> a new run dir
-  eval  [RUN] [--root=..]                                      -> opens one
+        [--branch RUN[:CHECKPOINT]]                            -> ... from a checkpoint
+  eval  [CHECKPOINT] [--root=..]                               -> evaluates one
   viz   [RUN] [--root=..]                                      -> opens one
 
 and two built in, for every experiment, that print a path (`cd "$(...)"`):
@@ -19,6 +20,7 @@ Two disjoint namespaces (see design.md):
   --flag[=value] -> staging flags   (the "how/where": tag, root)
 
 Resolution (cfg): dataclass defaults -> config.yaml -> CLI key=value. last wins.
+A branch starts from its parent's config.yaml instead of the defaults.
 """
 import dataclasses
 import inspect
@@ -40,7 +42,7 @@ def main(run=None, argv=None, *, eval=None, viz=None):
     registered on `run`'s experiment. `eval=` / `viz=` take plain `(cfg, ctx)`
     bodies and wrap them for that experiment.
     """
-    from .exp import _open_wrapper
+    from .exp import _eval_wrapper, _open_wrapper
     exp = getattr(run, "_runkit_experiment", None)
     if exp is None:
         raise TypeError("main(run): `run` must be decorated with @experiment "
@@ -49,6 +51,7 @@ def main(run=None, argv=None, *, eval=None, viz=None):
     for verb, fn in (("eval", eval), ("viz", viz)):
         if fn is not None:
             roles[verb] = (fn if hasattr(fn, "_runkit_experiment")
+                           else _eval_wrapper(fn, exp) if verb == "eval"
                            else _open_wrapper(fn, exp, verb))
     return _dispatch(exp.name, roles, argv)
 
@@ -78,7 +81,7 @@ def _dispatch(name, roles, argv):
             cfg, flags = _run_args(fn, argv)
         else:
             which, flags = _open_args(fn, verb, argv)
-    except (ValueError, TypeError) as e:
+    except (ValueError, TypeError) as e:       # RunNotFound too: a --branch not found
         sys.exit(str(e))
 
     if verb == "run":
@@ -146,7 +149,12 @@ def _heal_latest(run_dir):
 
 
 def _run_args(run, argv):
-    """argv -> (cfg, staging flags) for the run verb."""
+    """argv -> (cfg, staging flags) for the run verb.
+
+    With `--branch`, the checkpoint is found here (and handed on as a
+    `Checkpoint`): the config starts from the parent's `config.yaml` rather than
+    the class defaults, so a branch states only what differs.
+    """
     cfg_tokens, flags, positionals = split_argv(argv)
 
     # config layer: a yaml (positional or --config), then key=value on top.
@@ -154,21 +162,35 @@ def _run_args(run, argv):
     if config_file is not None:
         config_file = resolve_config_path(
             config_file, getattr(run, "_runkit_dir", None))
-    base = load_yaml(config_file) if config_file else {}
-    cfg = build_cfg(_cfg_type(run), deep_merge(base, parse_overrides(cfg_tokens)))
-
     _check_flags(run, flags)            # reject unknown --flags before we run
+    parent = {}
+    if flags.get("branch") is not None:
+        flags["branch"] = _branch(run, flags["branch"], flags.get("root"))
+        parent = load_yaml(flags["branch"].run / "config.yaml")
+    base = deep_merge(parent, load_yaml(config_file)) if config_file else parent
+    cfg = build_cfg(_cfg_type(run), deep_merge(base, parse_overrides(cfg_tokens)))
     return cfg, flags
 
 
+def _branch(run, which, root):
+    """`--branch RUN[:CHECKPOINT]` -> the `Checkpoint`, checked as the run
+    wrapper would (a body that takes `branch`, a non-empty state)."""
+    from .exp import _branch_checkpoint
+    from .settings import resolve_root
+    script = run._runkit_script
+    return _branch_checkpoint(run, str(which),
+                              resolve_root(script, script.stem, explicit=root))
+
+
 def _open_args(fn, verb, argv):
-    """argv -> (which run, staging flags) for eval / viz."""
+    """argv -> (which run or checkpoint, staging flags) for eval / viz."""
     cfg_tokens, flags, positionals = split_argv(argv)
+    what = "checkpoint" if getattr(fn, "_runkit_checkpoint", False) else "run"
     if cfg_tokens:
         raise ValueError(f"{verb} takes no key=value overrides (got {cfg_tokens}); "
                          f"the config is the one the run was made with")
     if len(positionals) > 1:
-        raise ValueError(f"{verb} takes at most one run (got {positionals})")
+        raise ValueError(f"{verb} takes at most one {what} (got {positionals})")
     _check_flags(fn, flags)
     return (positionals[0] if positionals else None), flags
 
@@ -233,6 +255,20 @@ def _flag_lines(fn):
 
 def _help_text(name, verb, fn, roles):
     verbs = ", ".join([v for v in VERBS if v in roles] + list(PATH_VERBS))
+    if getattr(fn, "_runkit_checkpoint", False):
+        return "\n".join([
+            f"usage: <experiment> {verb} [CHECKPOINT] [--flag ...]",
+            "",
+            f"experiment: {name}   (verbs: {verbs}; default: run)",
+            "",
+            "CHECKPOINT: a checkpoint dir, a run dir (its latest checkpoint), or",
+            "            RUN:NAME -- RUN a run dir or a hex prefix of a run's id",
+            f"            (default: the latest checkpoint of the latest run under "
+            f"{{root}}/{name} that has one)",
+            "",
+            "staging flags (--flag):",
+            *_flag_lines(fn),
+        ])
     if verb != "run":
         what = ("the latest finished (ok) run" if verb == "eval"
                 else "the latest run")

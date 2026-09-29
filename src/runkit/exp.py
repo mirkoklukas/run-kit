@@ -16,6 +16,7 @@ attempt is a flag. See design.md.
 import dataclasses
 import datetime
 import functools
+import inspect
 import os
 import pathlib
 import socket
@@ -135,7 +136,7 @@ class RunContext:
         append(self, stream, values)
 
     def checkpoint(self, name=None):
-        """`with ctx.checkpoint(name=None) as ckpt:` -- save into `ckpt.dir`.
+        """`with ctx.checkpoint(name=None) as ckpt:` -- save into `ckpt.state`.
 
         `{dir}/checkpoints/<name>/`, named by runkit's counter (`000003`) unless
         `name` is given; complete, recorded and made `latest` only when the block
@@ -254,7 +255,7 @@ def _launch():
         return None
 
 
-def init_run(cfg, *, name, tag, root, script=None, module=None):
+def init_run(cfg, *, name, tag, root, script=None, module=None, branch=None):
     """Create the run dir, freeze the run into it, return a RunContext.
 
     Writes the three files that say what the run was -- `config.yaml` (the
@@ -265,7 +266,8 @@ def init_run(cfg, *, name, tag, root, script=None, module=None):
 
     The run id and the dir's `{hex8}` share one uuid, so the dir is
     self-identifying (`id = {name}_{hex8}`) and never collides. It also becomes
-    `{root}/{name}/latest`.
+    `{root}/{name}/latest`. `branch`: the checkpoint a branch starts from, recorded
+    in `meta.yaml` as its lineage (`_lineage`).
     """
     hex8 = uuid.uuid4().hex[:8]
     uid = f"{name}_{hex8}"
@@ -277,20 +279,56 @@ def init_run(cfg, *, name, tag, root, script=None, module=None):
     _dump_yaml(run_dir / "run_context.yaml", {"id": uid, "name": name})
     _dump_yaml(run_dir / "meta.yaml",
                {"tag": tag, "script": str(script) if script else None,
-                "module": module, "launch": _launch()})
+                "module": module, "launch": _launch(),
+                **({"branch": _lineage(branch)} if branch is not None else {})})
     point_latest(run_dir)                    # {root}/{name}/latest: the latest *started* run
     return ctx
 
 
-def _announce(name, cfg, ctx, tag):
+def _lineage(ckpt):
+    """Where a branch comes from, for `meta.yaml`: the parent run (id and dir) and
+    its checkpoint (name, index, and the step count if its `info` has one)."""
+    try:
+        parent_id = yaml.safe_load((ckpt.run / "run_context.yaml").read_text())["id"]
+    except Exception:                                        # noqa: BLE001
+        parent_id = ckpt.run.name
+    return {"run": parent_id, "dir": str(ckpt.run), "checkpoint": ckpt.name,
+            "index": ckpt.index,
+            **({"steps": ckpt.info["steps"]} if "steps" in ckpt.info else {})}
+
+
+def _announce(name, cfg, ctx, tag, branch=None):
     """Print a one-time start banner: which run, where, and what it changes.
 
-    Only fields that differ from the defaults are echoed; the whole resolved
-    config is frozen at `{dir}/config.yaml`.
+    Only fields that differ from the defaults are echoed -- for a branch, from
+    its parent's config; the whole resolved config is frozen at
+    `{dir}/config.yaml`.
     """
-    changes, n_fields = config_changes(cfg)
+    parent = _parent_cfg(cfg, branch) if branch is not None else None
+    changes, n_fields = config_changes(cfg, base=parent)
     ui.run_started(name=name, run_id=ctx.id, run_dir=ctx.dir, tag=tag,
-                   changes=changes, n_fields=n_fields, launch=_launch())
+                   changes=changes, n_fields=n_fields, launch=_launch(),
+                   branch=_branch_text(branch) if branch is not None else None,
+                   against="the parent" if parent is not None else "defaults")
+
+
+def _parent_cfg(cfg, ckpt):
+    """The parent run's config, as `cfg`'s class; None if it no longer builds
+    (the class changed since) -- the banner then compares with the defaults."""
+    from .config import build_cfg
+    from .utils import load_yaml
+    try:
+        return build_cfg(type(cfg), load_yaml(ckpt.run / "config.yaml"))
+    except Exception:                                        # noqa: BLE001
+        return None
+
+
+def _branch_text(ckpt):
+    """`a3f9c1e7:best (3.0M steps)` -- the banner's `branch` line."""
+    from .runs import dir_hex
+    steps = ckpt.info.get("steps")
+    return f"{dir_hex(ckpt.run)}:{ckpt.name}" + (
+        f" ({ui._num(steps)} steps)" if isinstance(steps, (int, float)) else "")
 
 
 def _report(ctx, status, duration_s, error):
@@ -364,8 +402,10 @@ class Experiment:
         return self._register("run", _run_wrapper(f, self.name))
 
     def eval(self, f):
-        """Register `f(cfg, ctx)` as the eval: it opens a finished (`ok`) run dir."""
-        return self._register("eval", _open_wrapper(f, self, "eval"))
+        """Register `f(ckpt)` as the eval: it gets a checkpoint of a run
+        (`_checkpoint_wrapper`). The older `f(cfg, ctx)` opens a finished (`ok`)
+        run dir instead."""
+        return self._register("eval", _eval_wrapper(f, self))
 
     def viz(self, f):
         """Register `f(cfg, ctx)` as the viz: it opens a run dir to present it."""
@@ -400,22 +440,31 @@ def _run_wrapper(f, name):
     """Wrap a run body `f(cfg, ctx)`: create the run dir, record the outcome.
 
     The wrapper accepts the staging flags as keyword args -- `tag`, `root`,
-    `follow` -- which `autocli` forwards from the CLI; their names *are* the
-    allowed flags. `follow` names the stream printed as the run goes (default
+    `follow`, `branch` -- which `autocli` forwards from the CLI; their names *are*
+    the allowed flags. `follow` names the stream printed as the run goes (default
     `run`, from experiment.toml's `follow`; `none` for nothing).
     Without `root`, it comes from the nearest `experiment.toml`, else `./runs`
     (`settings.resolve_root`).
+
+    `branch` starts the run from a checkpoint: `RUN[:CHECKPOINT]` (see
+    `runs.select_checkpoint`) or a `Checkpoint`. Only a body that declares a
+    `branch` parameter -- `run(cfg, ctx, branch=None)` -- can be branched; it
+    gets the `Checkpoint`, or None for a fresh run. A body without one is
+    called `f(cfg, ctx)`, as always. `cfg` is used as given: from the CLI,
+    `autocli` builds it on the parent's config.
     """
     script = pathlib.Path(f.__code__.co_filename).resolve()
     module = _module_name(f)
+    takes_branch = "branch" in inspect.signature(f).parameters
 
     @functools.wraps(f)
-    def wrapper(cfg, *, tag=None, root=None, follow=None):
+    def wrapper(cfg, *, tag=None, root=None, follow=None, branch=None):
         root = resolve_root(script, script.stem, explicit=root)
         follow = resolve_follow(script, script.stem, explicit=follow)
+        branch = _branch_checkpoint(wrapper, branch, root)
         ctx = init_run(cfg, name=name, tag=tag, root=root, script=script,
-                       module=module)
-        _announce(name, cfg, ctx, tag)
+                       module=module, branch=branch)
+        _announce(name, cfg, ctx, tag, branch)
         started, t0 = datetime.datetime.now(), time.monotonic()
         ctx._live = _Live(t0=t0, started=_stamp(started))   # live: the body may write into the run
         if follow is not None:               # print this stream's rows as they are recorded
@@ -424,7 +473,7 @@ def _run_wrapper(f, name):
         _write_status(ctx.dir, status="running", started=_stamp(started))
         status, error = "ok", None
         try:
-            result = f(cfg, ctx)
+            result = f(cfg, ctx, branch=branch) if takes_branch else f(cfg, ctx)
         except KeyboardInterrupt:
             status = "interrupted"
             raise
@@ -451,7 +500,28 @@ def _run_wrapper(f, name):
     # where the experiment lives: `exp:` config paths, experiment.toml lookup
     wrapper._runkit_script = script
     wrapper._runkit_dir = script.parent
+    wrapper._runkit_takes_branch = takes_branch
     return wrapper
+
+
+def _branch_checkpoint(wrapper, branch, root):
+    """The `Checkpoint` a run branches from, or None; refuses what cannot be
+    continued: a body without a `branch` parameter, or a checkpoint whose
+    `state/` is empty (the body never saved anything)."""
+    from .checkpoints import Checkpoint
+    from .runs import select_checkpoint
+    if branch is None:
+        return None
+    if not wrapper._runkit_takes_branch:
+        raise ValueError(
+            f"{wrapper.__name__} takes no `branch`: it can't continue from a "
+            f"checkpoint (declare it: def {wrapper.__name__}(cfg, ctx, branch=None))")
+    ckpt = branch if isinstance(branch, Checkpoint) else \
+        select_checkpoint(root, wrapper._runkit_name, branch)
+    if ckpt.is_empty():
+        raise ValueError(f"{ui.short_path(ckpt.dir)}: nothing saved in its state/ -- "
+                         f"nothing to continue from")
+    return ckpt
 
 
 def _open_wrapper(f, exp, verb):
@@ -477,6 +547,42 @@ def _open_wrapper(f, exp, verb):
     wrapper._runkit_name = exp.name
     wrapper._runkit_script = script
     wrapper._runkit_dir = script.parent
+    return wrapper
+
+
+def _eval_wrapper(f, exp):
+    """An eval body `f(ckpt)` gets a checkpoint; one with a `cfg` parameter --
+    `f(cfg, ctx)`, from before -- opens a run dir, as viz does."""
+    if "cfg" in inspect.signature(f).parameters:
+        return _open_wrapper(f, exp, "eval")
+    return _checkpoint_wrapper(f, exp)
+
+
+def _checkpoint_wrapper(f, exp):
+    """Wrap an eval body `f(ckpt)`: pick a checkpoint, call `f` with it.
+
+    The wrapper is `fn(which=None, *, root=None)`. `which` picks the checkpoint
+    (see `runs.select_checkpoint`): None for the latest checkpoint of the latest
+    run that has one, a checkpoint dir, a run dir (its latest), or
+    `RUN:CHECKPOINT`. A run that failed or is still going is evaluated at its
+    latest complete checkpoint. The body gets the `Checkpoint`: it reads
+    `ckpt.state`, writes into `ckpt.eval` (made here), and records with
+    `runkit.record(ckpt.eval / "x.jsonl", ...)`. Returns what the body returns.
+    """
+    script = pathlib.Path(f.__code__.co_filename).resolve()
+
+    @functools.wraps(f)
+    def wrapper(which=None, *, root=None):
+        from .runs import select_checkpoint
+        root = resolve_root(script, script.stem, explicit=root)
+        ckpt = select_checkpoint(root, exp.name, which)
+        ckpt.eval.mkdir(exist_ok=True)
+        ui.opened(name=exp.name, verb="eval", run_dir=ckpt.dir)
+        return f(ckpt)
+    wrapper._runkit_name = exp.name
+    wrapper._runkit_script = script
+    wrapper._runkit_dir = script.parent
+    wrapper._runkit_checkpoint = True    # takes a checkpoint, not a run
     return wrapper
 
 
