@@ -16,7 +16,7 @@ import time
 import yaml
 
 from . import ui
-from .metrics import FOLDER
+from .metrics import FOLDER, NOTES
 
 POLL_S = 1.0          # how often to look for new rows
 HEADER_EVERY = 40     # reprint the header every so many rows, so it stays in view
@@ -33,12 +33,17 @@ def follow(run_dir, stream="run", keys=None, *, first=None, poll=POLL_S, sleep=t
     (default: the last 10). `sleep` is for tests.
     """
     path = run_dir / FOLDER / f"{stream}.jsonl"
+    notes_path = run_dir / FOLDER / f"{NOTES}.jsonl" if stream != NOTES else None
     table = _Table(keys)
     rows, offset = _read_from(path, 0)
+    notes, notes_offset = _read_from(notes_path, 0) if notes_path else ([], 0)
     count = len(rows)                       # rows of the stream so far, printed or not
     shown = rows[first if first is not None else slice(-10, None)]
     table.size(shown)                       # one header for the rows shown first
+    if shown:                               # the notes from the first row shown on
+        notes = [n for n in notes if _at(n) >= _at(shown[0])]
     for row in shown:
+        notes = _notes_before(notes, row, table)
         table.row(row)
     seen = _checkpoint_seen(run_dir)
     while True:
@@ -50,11 +55,15 @@ def follow(run_dir, stream="run", keys=None, *, first=None, poll=POLL_S, sleep=t
             seen = now
             pending = _checkpoint_record(run_dir, status)
         rows, offset = _read_from(path, offset)
+        if notes_path:
+            more, notes_offset = _read_from(notes_path, notes_offset)
+            notes += more
         at = (pending or {}).get("metrics", {}).get(stream, count)
         if pending is not None and at <= count:
             _print_checkpoint(status, pending, table)
             pending = None
         for row in rows:
+            notes = _notes_before(notes, row, table)
             table.row(row)
             count += 1
             if pending is not None and count >= at:
@@ -62,6 +71,7 @@ def follow(run_dir, stream="run", keys=None, *, first=None, poll=POLL_S, sleep=t
                 pending = None
         if pending is not None:
             _print_checkpoint(status, pending, table)
+        notes = _notes_before(notes, None, table)        # the rest: after the last row
         if status.get("status") != "running":
             _print_end(run_dir, status)
             return status.get("status")
@@ -206,6 +216,23 @@ class _Table:
             ui._flush_stdout()               # the body's prints first, as ui.line does
         console.print(f"[bold]{text}[/bold]" if header else text, markup=header,
                       highlight=False, soft_wrap=True, crop=False)
+
+
+def _at(row):
+    """When a row was recorded, into the run (`_elapsed_s`), for ordering."""
+    t = row.get("_elapsed_s")
+    return t if isinstance(t, (int, float)) else float("inf")
+
+
+def _notes_before(notes, row, table):
+    """Print the notes recorded before `row` (all of them for None), in order;
+    return the ones left."""
+    now = [n for n in notes if row is None or _at(n) <= _at(row)]
+    for n in now:
+        ui.note(str(n.get("note", "")),
+                {k: v for k, v in n.items() if k != "note" and not k.startswith("_")})
+        table.interrupt()
+    return [n for n in notes if n not in now]
 
 
 def _read_from(path, offset):

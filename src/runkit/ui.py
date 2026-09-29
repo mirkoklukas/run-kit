@@ -144,6 +144,12 @@ def opened(*, name, verb, run_dir):
          f"[dim]{escape(short_path(run_dir))}[/dim]")
 
 
+def note(message, values=None):
+    """A note of the run's (`ctx.note`): `◇ message  key=value ...`."""
+    kv = "  ".join(f"{k}={_num(v)}" for k, v in (values or {}).items())
+    line(f"◇ {escape(message)}" + (f"  [dim]{escape(_clip(kv))}[/dim]" if kv else ""))
+
+
 def checkpoint_opened(ckpt, now=None):
     """The line under eval's header: which checkpoint, when it was saved (and how
     long ago), how far into its run, the progress, and its info."""

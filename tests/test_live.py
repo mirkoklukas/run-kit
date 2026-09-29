@@ -251,3 +251,36 @@ def test_follow_default_from_experiment_toml(tmp_path):
     assert resolve_follow(exp_file, "other") == "reward"
     assert resolve_follow(exp_file, "e", explicit="run") == "run"   # the flag wins
     assert resolve_follow(exp_file, "e", explicit=True) == "run"    # a bare --follow
+
+
+# -- ctx.note: a remark about the run, printed and kept ------------------------------
+
+def test_note_prints_records_and_names_the_columns_again(tmp_path, capsys):
+    def body(cfg: Cfg, ctx: RunContext):
+        ctx.record(it=0, loss=1.0)
+        ctx.note("ramp starts", steps=500_000)
+        ctx.record(it=1, loss=0.5)
+        with ctx.checkpoint("c") as ckpt:
+            (ckpt.state / "x").write_text("1")
+
+    r = _run(body, tmp_path)
+    lines = capsys.readouterr().err.splitlines()
+    at = next(i for i, l in enumerate(lines) if "◇ ramp starts" in l)
+    assert "steps=500k" in lines[at]
+    assert lines[at + 1].split()[:1] == ["_elapsed_s"]              # the header again
+    rows = load_metrics(r.context.dir, "notes")
+    assert [(n["note"], n["steps"]) for n in rows] == [("ramp starts", 500_000)]
+    assert "_elapsed_s" in rows[0] and "_time" in rows[0]
+    rec = yaml.safe_load((r.context.dir / "checkpoints" / "c" / "checkpoint.yaml").read_text())
+    assert "notes" not in rec["summary"] and rec["metrics"]["notes"] == 1   # counted, not summarized
+
+
+def test_note_is_for_the_live_run(tmp_path):
+    def body(cfg: Cfg, ctx: RunContext):
+        with pytest.raises(ValueError, match="message's key"):
+            ctx.note("x", note="y")
+        return ctx
+
+    ctx = _run(body, tmp_path).retval
+    with pytest.raises(RuntimeError, match="only the live run"):
+        ctx.note("too late")

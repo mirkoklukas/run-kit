@@ -302,6 +302,44 @@ def test_follow_puts_a_checkpoint_after_the_rows_it_followed(tmp_path, capsys, m
 
 
 
+def test_follow_places_notes_between_the_rows_by_time(tmp_path, capsys):
+    """Notes (`ctx.note`, metrics/notes.jsonl) are shown as they come, at their
+    place among the rows by `_elapsed_s`; those before the rows shown, not."""
+    d = _live_run(tmp_path)                                    # rows at 0..11 s
+    with open(d / "metrics" / "notes.jsonl", "w") as f:
+        f.write(json.dumps({"_elapsed_s": 0.5, "note": "too early to show"}) + "\n")
+        f.write(json.dumps({"_elapsed_s": 10.5, "note": "between", "k": 1}) + "\n")
+    polls = []
+
+    def sleep(_):
+        polls.append(1)
+        if len(polls) == 1:                                    # a row and a note arrive
+            with open(d / "metrics" / "run.jsonl", "a") as f:
+                f.write(json.dumps({"_elapsed_s": 13, "it": 12, "loss": 0.1}) + "\n")
+            with open(d / "metrics" / "notes.jsonl", "a") as f:
+                f.write(json.dumps({"_elapsed_s": 12.5, "note": "live"}) + "\n")
+        else:
+            _set_status(d, "ok")
+
+    follow(d, first=slice(-2, None), sleep=sleep)              # rows 10, 11 shown first
+    err = capsys.readouterr().err
+    assert "too early" not in err and "◇ between" in err and "k=1" in err and "◇ live" in err
+
+
+def test_follow_orders_notes_and_rows(tmp_path, monkeypatch):
+    from runkit import ui
+    from runkit.follow import _Table
+    d = _live_run(tmp_path)
+    with open(d / "metrics" / "notes.jsonl", "w") as f:
+        f.write(json.dumps({"_elapsed_s": 10.5, "note": "N"}) + "\n")
+    _set_status(d, "ok")
+    printed = []
+    monkeypatch.setattr(ui, "note", lambda message, values=None: printed.append(message))
+    monkeypatch.setattr(_Table, "row", lambda self, row: printed.append(row["it"]))
+    follow(d, first=slice(-3, None), sleep=lambda _: None)
+    assert printed == [9, 10, "N", 11]
+
+
 def test_metrics_of_a_run_without_any(tmp_path, capsys):
     d = tmp_path / "r"
     d.mkdir()

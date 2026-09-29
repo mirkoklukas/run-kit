@@ -23,7 +23,8 @@
   moving it to `ckpt.state`, `branch` and `evaluate(ckpt)` is its own change.
 - [x] **progress and metrics** — built: `ctx.progress(n=None, /, *, total=None)` ->
   `progress` / `total` in `status.yaml`; `ctx.record(stream=None, /, **values)` ->
-  `metrics/<stream>.jsonl`, read with `load_metrics`; `ctx.live`. Open: marking
+  `metrics/<stream>.jsonl`, read with `load_metrics`; `ctx.live`; `ctx.note(message,
+  **values)` -> a printed line and `metrics/notes.jsonl`. Open: marking
   eval re-runs, showing progress (proposals.md, "Progress and metrics: open").
 - [ ] **detached runs** — start a run in the background, follow its log, stop it
   cleanly (`runkit run --detach experiment.py ...`; the slot between verb and

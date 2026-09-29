@@ -135,6 +135,29 @@ class RunContext:
                                "only the live run writes it")
         append(self, stream, values)
 
+    def note(self, message, /, **values):
+        """Say something about the run, and keep it: `ctx.note("support ramp
+        starts", steps=n)`.
+
+        Printed as a line between the rows (`◇ support ramp starts  steps=500k`;
+        the `--follow` table names its columns again after it), and recorded to
+        `{dir}/metrics/notes.jsonl` -- `note` and the values, with `_time` and
+        `_elapsed_s` -- so it stays with the run, and `runkit metrics follow`
+        shows it from another terminal. Notes are events, not metrics: they are
+        not in the checkpoint summaries. Live runs only.
+        """
+        from .metrics import NOTES, append
+        live = self._require_live("ctx.note")
+        if "note" in values:
+            raise ValueError("ctx.note: `note` is the message's key; name the value otherwise")
+        append(self, NOTES, {"note": str(message), **values})
+        try:                                  # best-effort: never costs the run
+            ui.note(str(message), values)
+            if live.table is not None:
+                live.table.interrupt()
+        except Exception:                                    # noqa: BLE001
+            pass
+
     def checkpoint(self, name=None):
         """`with ctx.checkpoint(name=None) as ckpt:` -- save into `ckpt.state`.
 

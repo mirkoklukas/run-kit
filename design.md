@@ -514,8 +514,15 @@ _elapsed_s       it    steps  ep_return   ep_len      vx
     9m 22s      194    2.38M       28.5      500  0.0623
   ◆ checkpoint  checkpoints/current  at 9m 24s  2.39M / 10M  24%
     run  20 rows since the last: ep_return 28.3  ep_len 500  ·  it 194  steps 2.38M
+_elapsed_s       it    steps  ep_return   ep_len      vx
     9m 25s      195     2.4M       28.6      500  0.0616
+  ◇ support ramp starts  steps=2.4M
+_elapsed_s       it    steps  ep_return   ep_len      vx
+    9m 28s      196    2.41M       28.8      500  0.0631
 ```
+
+The `◇` line is a note of the run's own (`ctx.note`, see "Progress and
+metrics").
 
 So the run's own terminal and `follow` from elsewhere look the same. The table
 goes to stderr with the rest of runkit's output, so stdout stays the
@@ -671,6 +678,8 @@ class Checkpoint:
     metrics: dict    # lines each metrics stream had when it completed (runkit's)
     summary: dict    # per stream: the rows since the last checkpoint (runkit's)
     run: Path        # the run dir it belongs to
+    time: str        # when it completed; elapsed_s: how far into the run
+    progress: ...    # ctx.progress when it completed, and total (from checkpoint.yaml)
     state: Path      # {dir}/state: the body's -- what continuing needs
     eval: Path       # {dir}/eval: an eval's
 ```
@@ -974,6 +983,25 @@ running run:
 | `ctx.record(**values)` | stream `run` | error: name a stream |
 | `ctx.record("eval", **values)` | yes | yes |
 | `ctx.record("run", **values)` | yes | error: `run` is the run's own |
+| `ctx.note(message, **values)` | yes | error |
+
+**`ctx.note(message, /, **values)`** says something about the run and keeps it
+— a curriculum stage starting, a learning-rate drop, a NaN clipped:
+
+```python
+ctx.note("support ramp starts", steps=self.num_timesteps)
+```
+
+It is printed as a line between the rows (`◇ support ramp starts
+steps=500k`), after which the `--follow` table names its columns again, and
+recorded to `metrics/notes.jsonl` (`note` and the values, with `_time` and
+`_elapsed_s`), so it stays with the run and `runkit metrics follow` shows it
+from another terminal. Notes are events, not metrics: they are counted in a
+checkpoint's `metrics` but left out of its summary. Named `note`, not `print`
+(which promises the built-in's behavior and says nothing about keeping it),
+`log` (the run's captured stdout, and what W&B calls recording metrics) or
+`info` (`ckpt.info` is a dict; `logging.info` implies levels). A plain
+`print()` stays fine for what need not be kept.
 
 **`record(path, **values)`**, from `runkit`, is the raw form: one json line
 appended to the file it is given (its folder made), with `_time` added, numpy
@@ -1058,6 +1086,7 @@ as it is written, from any terminal or machine that sees the run dir:
         1.5s     4       0.2
   ◆ checkpoint  checkpoints/current  at 1.5s  5 / 12  42%
     run  5 rows since the last: loss 0.457  ·  it 4
+  _elapsed_s    it      loss
         1.8s     5     0.167
   ✓ slow_5a35d412  ok in 3.7s  → runs/slow/latest
 ```
@@ -1071,8 +1100,10 @@ new lines; Ctrl-C stops following, never the run. The first column is runkit's
 `_elapsed_s`, shown as a duration. The header comes again when
 a new key appears or a column widens -- after a gray line saying which
 (`◇ widened: vx`, `◇ new column: air_s`), as a checkpoint has its own --, after a
-checkpoint's lines (so the columns are named where the rows resume), and every
-40 rows.
+checkpoint's lines or a note (so the columns are named where the rows resume),
+and every 40 rows. The run's notes (`metrics/notes.jsonl`) are shown as they
+come, placed among the rows by `_elapsed_s`; notes from before the first row
+shown are left out.
 
 Keys in a group sit side by side under one header naming the group, each column
 headed by its short name, so a column is as wide as `lin` and its values rather

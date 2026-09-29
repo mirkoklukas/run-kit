@@ -22,6 +22,7 @@ from .utils import plain
 
 FOLDER = "metrics"
 RESERVED_PREFIX = "_"          # keys starting with it are runkit's
+NOTES = "notes"                # the stream ctx.note writes: events, not metrics
 
 
 def _check_stream(stream):
@@ -61,7 +62,7 @@ def _append_row(path, row):
 
 
 def append(ctx, stream, values):
-    """Append one row to `{ctx.dir}/metrics/<stream>.jsonl`."""
+    """Append one row to `{ctx.dir}/metrics/<stream>.jsonl`; returns the row."""
     _check_stream(stream)
     _check_keys(values, "ctx.record")
     t0 = ctx._live.t0 if ctx._live is not None else ctx._opened
@@ -71,13 +72,16 @@ def append(ctx, stream, values):
     _append_row(ctx.dir / FOLDER / f"{stream}.jsonl", row)
     if ctx._live is not None:               # counted for checkpoint.yaml
         ctx._live.records[stream] = ctx._live.records.get(stream, 0) + 1
-        # summarized at the next checkpoint, every stream the run records
-        _add_to_window(ctx._live.windows.setdefault(stream, {}), row)
+        # summarized at the next checkpoint, every stream the run records --
+        # but notes: events, not numbers to average
+        if stream != NOTES:
+            _add_to_window(ctx._live.windows.setdefault(stream, {}), row)
         if ctx._live.follow == stream:      # shown as it goes (--follow), best-effort
             try:
                 ctx._live.table.row(row)
             except Exception:                                # noqa: BLE001
                 pass
+    return row
 
 
 def stream_folder(run_dir):
