@@ -533,7 +533,13 @@ experiment decides the cadence by when it checkpoints, and nothing is printed
 per `record` or per `progress`. A save that fails prints nothing.
 
 `eval` and `viz` print one header line, `▶ runkit · baseline · viz <run dir>`
-(for `eval`, the checkpoint's folder), and then whatever their body prints. A
+(for `eval`, the checkpoint's folder), and then whatever their body prints.
+`eval` adds a line about the checkpoint: its name and index, when it was saved
+and how long ago, how far into the run, the progress and its `info` —
+
+```
+  checkpoint current (#12)  ·  saved 2026-09-29 10:08:40 (3 h ago)  ·  1h 12m into the run  ·  2.66M / 10M  27%  ·  it=240  steps=2.66M
+``` A
 branch's banner has a `branch` line — `a3f9c1e7:best (3.0M steps)` — and
 compares its config with the parent's.
 

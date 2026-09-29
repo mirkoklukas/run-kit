@@ -144,6 +144,40 @@ def opened(*, name, verb, run_dir):
          f"[dim]{escape(short_path(run_dir))}[/dim]")
 
 
+def checkpoint_opened(ckpt, now=None):
+    """The line under eval's header: which checkpoint, when it was saved (and how
+    long ago), how far into its run, the progress, and its info."""
+    import datetime
+    parts = [f"checkpoint {escape(ckpt.name)} (#{ckpt.index})"]
+    if ckpt.time:
+        saved = f"saved {ckpt.time.replace('T', ' ')}"
+        try:
+            ago = ((now or datetime.datetime.now())
+                   - datetime.datetime.fromisoformat(ckpt.time)).total_seconds()
+            saved += f" ({_ago(ago)})"
+        except ValueError:
+            pass
+        parts.append(saved)
+    if ckpt.elapsed_s is not None:
+        parts.append(f"{_duration(ckpt.elapsed_s)} into the run")
+    if ckpt.progress is not None or ckpt.total:
+        parts.append(escape(_progress_text(ckpt.progress or 0, ckpt.total)))
+    if ckpt.info:
+        parts.append(escape(_clip("  ".join(f"{k}={_num(v)}" for k, v in ckpt.info.items()))))
+    line(f"[dim]{'  ·  '.join(parts)}[/dim]")
+
+
+def _ago(seconds):
+    """`just now`, `12 min ago`, `3 h ago`, `2 days ago`."""
+    if seconds < 60:
+        return "just now"
+    if seconds < 3600:
+        return f"{int(seconds // 60)} min ago"
+    if seconds < 2 * 86400:
+        return f"{int(seconds // 3600)} h ago"
+    return f"{int(seconds // 86400)} days ago"
+
+
 def _launch_text(launch):
     """meta.yaml's `launch` as one short line: how the process was started."""
     parts = []

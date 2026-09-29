@@ -146,6 +146,22 @@ def test_eval_gets_the_latest_checkpoint_and_writes_into_it(tmp_path):
     assert ckpt.run == r.context.dir
 
 
+def test_eval_says_which_checkpoint_and_when_it_was_saved(tmp_path, capsys):
+    import datetime
+    from runkit import ui
+    exp = _exp()
+    _go(exp, tmp_path)
+    capsys.readouterr()
+    ckpt = _go(exp, tmp_path, "eval")
+    assert ckpt.time and ckpt.elapsed_s is not None             # read from checkpoint.yaml
+    err = " ".join(capsys.readouterr().err.split())
+    assert "checkpoint current (#3)" in err and "saved " + ckpt.time.replace("T", " ") in err
+    assert "just now" in err and "into the run" in err and "steps=3" in err
+    later = datetime.datetime.fromisoformat(ckpt.time) + datetime.timedelta(hours=5)
+    ui.checkpoint_opened(ckpt, now=later)
+    assert "(5 h ago)" in capsys.readouterr().err
+
+
 def test_eval_picks_a_checkpoint_and_skips_runs_without_one(tmp_path):
     exp = _exp()
     r = _go(exp, tmp_path)

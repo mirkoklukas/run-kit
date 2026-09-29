@@ -578,6 +578,7 @@ def _checkpoint_wrapper(f, exp):
         ckpt = select_checkpoint(root, exp.name, which)
         ckpt.eval.mkdir(exist_ok=True)
         ui.opened(name=exp.name, verb="eval", run_dir=ckpt.dir)
+        ui.checkpoint_opened(ckpt)
         return f(ckpt)
     wrapper._runkit_name = exp.name
     wrapper._runkit_script = script

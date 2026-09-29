@@ -55,6 +55,10 @@ class Checkpoint:
     metrics: dict = dataclasses.field(default_factory=dict)  # lines per metrics stream when it completed
     summary: dict = dataclasses.field(default_factory=dict)  # per stream: the rows since the last one
     run: pathlib.Path | None = None                         # the run dir it belongs to
+    time: str | None = None           # when it completed (ISO, to the second)
+    elapsed_s: float | None = None    # how far into the run, in seconds
+    progress: object = None           # ctx.progress when it completed ...
+    total: object = None              # ... and its total
 
     @property
     def state(self) -> pathlib.Path:
@@ -134,6 +138,8 @@ class _Saving:
         ctx._live.windows = {}                # the next checkpoint summarizes from here
         ckpt.metrics = dict(ctx._live.records)
         ckpt.summary = record["summary"]
+        ckpt.time, ckpt.elapsed_s = record["time"], record["elapsed_s"]
+        ckpt.progress, ckpt.total = record["progress"], record["total"]
         ckpt.dir = self.final
         point_latest(self.final)
         # status.yaml names it at once (not throttled like progress): what a
@@ -190,7 +196,9 @@ def load_checkpoints(run_dir):
                                     info=rec.get("info") or {},
                                     metrics=rec.get("metrics") or {},
                                     summary=rec.get("summary") or {},
-                                    run=pathlib.Path(run_dir).resolve()))
+                                    run=pathlib.Path(run_dir).resolve(),
+                                    time=rec.get("time"), elapsed_s=rec.get("elapsed_s"),
+                                    progress=rec.get("progress"), total=rec.get("total")))
         except Exception:                                    # noqa: BLE001
             continue
     return sorted(found, key=lambda c: c.index)
