@@ -3,7 +3,8 @@
 Lightweight, reproducible experiment runs. You write a `Config` and a
 `run(cfg, ctx)`; runkit turns the script into a CLI, gives every run a fresh
 self-describing directory, and records what the run was and how it went. Next to
-the run, an experiment can say how to evaluate a run and how to look at one.
+the run, an experiment can say how to evaluate one of its checkpoints and how to
+look at a run, and a run can be continued from a checkpoint as a new one.
 
 It is deliberately small. Features get added when a real need shows up, not
 before — there is no config composition, no server, no database, and no tracking
@@ -43,9 +44,9 @@ def run(cfg: Config, ctx: RunContext):
     return {"loss": 0.31}                # optional -> retval.json
 
 
-@exp.eval                                # optional: process what a run wrote
-def evaluate(cfg: Config, ctx: RunContext):
-    ...                                  # writes under ctx.out, e.g. ctx.out / "eval"
+@exp.eval                                # optional: evaluate a checkpoint of a run
+def evaluate(ckpt):
+    ...                                  # reads ckpt.state, writes into ckpt.eval
 
 
 @exp.viz                                 # optional: the first thing to look at
@@ -60,6 +61,10 @@ if __name__ == "__main__":
 Two things are required and checked: `Config` must be a dataclass, and the
 run's `cfg` parameter must carry it as a type annotation — that annotation is
 how runkit knows what to build from the command line.
+
+A run that can be continued from a checkpoint declares it —
+`run(cfg, ctx, branch=None)` — and saves what continuing needs in its
+checkpoints (see "Checkpoints" and "Branching").
 
 A run-only experiment has a shorthand, and `main(run)` works for it as it
 always has:
@@ -81,12 +86,16 @@ python experiment.py config.yaml                      # + a config yaml
 python experiment.py config.yaml lr=1e-4 --tag=abl-a  # + a variant label
 python experiment.py --help                           # fields and flags for this experiment
 
+python experiment.py --branch a3f9 lr=1e-5            # continue run a3f9 from its latest checkpoint
+
 python experiment.py viz                              # look at the latest run
-python experiment.py eval a3f9                        # evaluate the run whose id starts a3f9
+python experiment.py eval a3f9                        # evaluate the latest checkpoint of run a3f9
+python experiment.py eval a3f9:best                   # ... or its checkpoint `best`
 python experiment.py viz --help                       # what viz takes
 
 runkit viz experiment.py                              # the same, via runkit
 runkit viz lab.baseline.experiment                    # ... or by module name
+runkit eval runs/baseline/latest/checkpoints/best     # ... or by path: the run names its experiment
 ```
 
 ### Arguments vs flags
@@ -145,6 +154,9 @@ Three layers, last wins:
 dataclass defaults  →  config.yaml  →  key=value
 ```
 
+A branch (`--branch`) starts from its parent's `config.yaml` instead of the
+dataclass defaults; the other two layers go on top as usual.
+
 The yaml is optional, and so is any key in it — a partial config is normal and
 most runs pass none at all. Defaults are not a merge step: only keys somebody
 actually set are passed to the constructor, so every unmentioned field falls
@@ -185,8 +197,9 @@ class Config:
     seed: int = random_seed()      # e.g. seed: 1978328730 in config.yaml
 ```
 
-`seed=7` overrides it (no draw), `seed=1978328730` repeats that run, and `eval`
-/ `viz` get the recorded seed back. The banner always shows a drawn seed, since
+`seed=7` overrides it (no draw), `seed=1978328730` repeats that run, and `viz`
+(or `load_run`, or `load_config` on the run's `config.yaml`) gets the recorded
+seed back; a branch keeps its parent's. The banner always shows a drawn seed, since
 it never equals "the default". For a fixed default, it is just `seed: int = 0`.
 runkit does not seed any library itself: how a seed is used (numpy, torch, JAX
 keys) is the experiment's business.
@@ -219,6 +232,8 @@ as `1e3`.
 --config=PATH    the config yaml (same as the bare positional)
 --root=DIR       where run dirs are created (default: experiment.toml, else ./runs)
 --follow=STREAM  the metrics stream printed as the run goes (default: run; none: nothing)
+--branch=RUN[:CHECKPOINT]
+                 start from a checkpoint of an earlier run, on its config (see "Branching")
 ```
 
 The accepted flags are not a hardcoded list — they are the keyword arguments the
@@ -517,8 +532,10 @@ folder relative to the run dir, how far into the run, the progress and its
 experiment decides the cadence by when it checkpoints, and nothing is printed
 per `record` or per `progress`. A save that fails prints nothing.
 
-`eval` and `viz` print one header line, `▶ runkit · baseline · viz <run dir>`,
-and then whatever their body prints.
+`eval` and `viz` print one header line, `▶ runkit · baseline · viz <run dir>`
+(for `eval`, the checkpoint's folder), and then whatever their body prints. A
+branch's banner has a `branch` line — `a3f9c1e7:best (3.0M steps)` — and
+compares its config with the parent's.
 
 ### What lands on disk
 
@@ -530,7 +547,8 @@ runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a/
 ├── status.yaml        running | ok | failed | interrupted; who, how far, how long
 ├── traceback.txt      only if the run raised
 ├── retval.json        the return value, if there was one (.npy for an array)
-├── checkpoints/       only if the run used ctx.checkpoint (see "Checkpoints")
+├── checkpoints/       only if the run used ctx.checkpoint (see "Checkpoints"):
+│                      each checkpoint.yaml, state/ (the body's), eval/ (an eval's)
 ├── metrics/           only if something used ctx.record (see "Progress and metrics")
 └── out/               ctx.out -- everything the body writes
 ```
@@ -564,10 +582,18 @@ name: baseline
 tag: abl-a
 script: /abs/path/to/experiment.py
 module: lab.baseline.experiment   # null for a plain `python experiment.py`
+launch: {extras: [mjx], vars: {}, project: /abs/path}   # set up from experiment.toml
+branch:                           # only a branch: where it came from
+  run: baseline_7c21d0e4
+  dir: /abs/path/to/runs/baseline/2026-06-25_09-12-40_7c21d0e4
+  checkpoint: best
+  index: 12
+  steps: 3000000                  # if the checkpoint's info has it
 ```
 
 `script` is the file; `module` is its importable name, which is what re-imports
-a package experiment that uses relative imports. `python -m
+a package experiment that uses relative imports — and what `runkit eval <path>`
+imports when no experiment is named. `python -m
 lab.baseline.experiment` records the real name, not `__main__`. A plain script
 has no such name.
 
@@ -867,10 +893,12 @@ shows how far it got.
 - **Named `record`**, not `log`: "log" is the run's captured stdout (planned)
   and python's `logging`, both text.
 - **A folder of streams**, runkit-owned, next to `checkpoints/` and `out/`. The
-  run records to `run`; anything else names its stream — `eval` records with
-  `ctx.record("eval", ...)` to `metrics/eval.jsonl`, so its numbers never mix
-  into the training series. `_elapsed_s` there counts from when eval opened the
-  run.
+  run records to `run`; anything else names its stream — `ctx.record("reward",
+  ...)` to `metrics/reward.jsonl`, so its numbers never mix into the watched
+  series. An eval records into the checkpoint it evaluates instead
+  (`record(ckpt.eval / ...)`, below); a context opened from disk (`load_run`,
+  `viz`) records to a stream it names, with `_elapsed_s` counted from when it
+  was opened.
 - **Keep `run` small — a practice, not a rule runkit enforces.** The `run`
   stream is what gets watched: `runkit metrics follow` follows it by default,
   each checkpoint's summary puts it first, `info` lists it first. So it should hold a
@@ -933,7 +961,7 @@ shows how far it got.
 What a context may write follows from `ctx.live` — true only in the body of a
 running run:
 
-| call | live (the run) | not live (eval, viz, `load_run`, a finished run) |
+| call | live (the run) | not live (viz, `load_run`, a finished run) |
 | ---- | -------------- | ------------------------------------------------ |
 | `ctx.progress(...)` | yes | error |
 | `ctx.checkpoint(...)` | yes | error |
@@ -1286,18 +1314,21 @@ and it is required. It describes the *experiment* — it travels with the code �
 so it takes only definition-level arguments. Everything that stages an attempt
 is a flag instead.
 
-Every role body has the same `(cfg, ctx)` signature; the decorator is what
-changes the calling convention:
+The decorator is what turns a body into the callable the CLI (and python) calls:
 
 | decorator | body you write | decorated callable |
 | --------- | -------------- | ------------------ |
-| `@exp.run` | `run(cfg, ctx)` | `run(cfg, *, tag=..., root=...) -> Run` |
-| `@exp.eval` | `evaluate(cfg, ctx)` | `evaluate(run=None, *, root=...)` |
+| `@exp.run` | `run(cfg, ctx)`, or `run(cfg, ctx, branch=None)` | `run(cfg, *, tag=..., root=..., follow=..., branch=...) -> Run` |
+| `@exp.eval` | `evaluate(ckpt)` | `evaluate(which=None, *, root=...)` |
 | `@exp.viz` | `show(cfg, ctx)` | `show(run=None, *, root=...)` |
+
+An eval body with a `cfg` parameter — `evaluate(cfg, ctx)`, from before eval
+took a checkpoint — is wrapped like `viz`: it opens a run (the latest `ok` one
+by default).
 
 `main(run, eval=..., viz=...)` is the same dispatcher as a function: it picks up
 whatever is registered on `run`'s experiment, and `eval=` / `viz=` take plain
-`(cfg, ctx)` bodies.
+bodies.
 
 ---
 
