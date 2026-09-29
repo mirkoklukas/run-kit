@@ -87,6 +87,7 @@ python experiment.py config.yaml lr=1e-4 --tag=abl-a  # + a variant label
 python experiment.py --help                           # fields and flags for this experiment
 
 python experiment.py --branch a3f9 lr=1e-5            # continue run a3f9 from its latest checkpoint
+python experiment.py --branch a3f9 'lr*=0.5'          # ... with half its learning rate
 
 python experiment.py viz                              # look at the latest run
 python experiment.py eval a3f9                        # evaluate the latest checkpoint of run a3f9
@@ -148,14 +149,36 @@ YAML on purpose: `experiment.yaml` next to `config.yaml` files would read as
 
 ### Config resolution
 
-Three layers, last wins:
+Three layers, last wins, then changes to numbers:
 
 ```
-dataclass defaults  →  config.yaml  →  key=value
+dataclass defaults  →  config.yaml  →  key=value  →  key+=v, key-=v, key*=v, key/=v
 ```
 
 A branch (`--branch`) starts from its parent's `config.yaml` instead of the
-dataclass defaults; the other two layers go on top as usual.
+dataclass defaults; the other layers go on top as usual.
+
+**Changing a number instead of setting it.** `key+=v`, `key-=v`, `key*=v` and
+`key/=v` apply to the value the layers before give — for a branch, the
+parent's — so "double the support weight from where this run is" needs no
+looking up:
+
+```bash
+runkit run lab.rl_env.test_policy --branch a3f9 'env.w_support*=2' env.w_slip-=5
+runkit run lab.rl_env.test_policy 'steps+=5e6' '_schedule.env.w_support.start+=1e6'
+```
+
+- Several on one key apply left to right: `w=10 'w*=3' w-=5` is 25.
+- Numbers only: a key that holds a string, a bool or None, or a value that is
+  not a number, is an error. An `int` field (by its annotation; inside a dict
+  field, by its value) stays an int, and a result that is not whole is an error
+  rather than being cut (`n_envs*=1.5` on 12 is 18; on 13, an error).
+- The operator sits before the `=`, never after: `x=-5` sets a negative value,
+  as always, and keys never end in `+ - * /`, so nothing is ambiguous.
+- `config.yaml` records the result, like any value; the banner shows how it
+  came about: `env.w_support: 30.0  # 15 × 2`.
+- `*` is a glob character: zsh refuses an unquoted `env.w*=2` (`no matches
+  found`), so quote it — `'env.w*=2'`. The others need no quotes.
 
 The yaml is optional, and so is any key in it — a partial config is normal and
 most runs pass none at all. Defaults are not a merge step: only keys somebody

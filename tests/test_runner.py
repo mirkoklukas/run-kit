@@ -7,13 +7,13 @@ import dataclasses
 import json
 import pathlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 import pytest
 import yaml
 
-from runkit import Run, RunContext, experiment, init_run
+from runkit import Experiment, Run, RunContext, experiment, init_run
 from runkit.autocli import main
 from runkit.config import build_cfg, deep_merge, parse_overrides
 from runkit.runs import dir_hex
@@ -286,7 +286,7 @@ def test_meta_records_the_module(tmp_path):
 
 
 _EXP_SRC = '''
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from runkit import RunContext, experiment, main
 
 @dataclass
@@ -510,3 +510,67 @@ def test_yaml_and_cli_both_merge_into_a_dict_default():
                                       parse_overrides(["schedule.env.w_support.end=6e6"])))
     assert cfg.schedule == {"env": {"w_support": {"start": 1e6, "end": 6e6},
                                     "w_air": {"start": 0.0, "end": 3e6}}}
+
+
+# -- key+=v, key-=v, key*=v, key/=v: change a number --------------------------------
+
+def test_split_ops_tells_operations_from_values():
+    from runkit.config import split_ops
+    sets, ops = split_ops(["a=1", "b*=2", "c.d+=1e6", "e=-5", "f-=3", "g/=4", "h=x=y"])
+    assert sets == ["a=1", "e=-5", "h=x=y"]                     # `=-5` is a value
+    assert ops == [("b", "*", "2"), ("c.d", "+", "1e6"), ("f", "-", "3"), ("g", "/", "4")]
+
+
+def test_apply_ops_changes_numbers_left_to_right():
+    from runkit.config import apply_ops
+
+    @dataclass
+    class Inner:
+        w: float = 15.0
+        n: int = 12
+        f: float = 5                                 # an int default in a float field
+
+    @dataclass
+    class Outer:
+        inner: Inner = field(default_factory=Inner)
+        sched: dict = field(default_factory=lambda: {"w": {"start": 500_000}})
+        name: str = "x"
+
+    cfg, how = apply_ops(Outer(), [("inner.w", "*", "2"), ("inner.n", "-", "2"),
+                                   ("sched.w.start", "+", "1e6"), ("inner.f", "/", "2"),
+                                   ("inner.w", "+", "1"), ("inner.w", "*", "2")])
+    assert cfg.inner == Inner(w=62.0, n=10, f=2.5) and cfg.sched == {"w": {"start": 1_500_000}}
+    assert isinstance(cfg.inner.n, int) and isinstance(cfg.sched["w"]["start"], int)
+    assert how["inner.w"] == "(15 × 2 + 1) × 2" and how["sched.w.start"] == "500000 + 1e6"
+    assert apply_ops(Outer(), [("inner.n", "*", "1.5")])[0].inner.n == 18   # whole: fine
+    for ops, match in [([("inner.n", "*", "1.1")], "is an int"),
+                       ([("inner.nope", "+", "1")], "unknown field"),
+                       ([("sched.v", "+", "1")], "no 'sched.v'"),
+                       ([("name", "+", "1")], "not a number"),
+                       ([("inner.w", "+", "abc")], "is not a number"),
+                       ([("inner.w", "/", "0")], "division by zero")]:
+        with pytest.raises(ValueError, match=match):
+            apply_ops(Outer(), ops)
+
+
+def test_run_applies_ops_after_the_other_layers(tmp_path, capsys):
+    @dataclass
+    class C:
+        w: float = 15.0
+        n: int = 4
+
+    exp = Experiment("ops")
+
+    @exp.run
+    def run(cfg: C, ctx: RunContext, branch=None):
+        with ctx.checkpoint("c") as ckpt:
+            (ckpt.state / "x").write_text("1")
+
+    r = exp.main(["w=10", "w*=3", "w-=5", f"--root={tmp_path}"])
+    assert r.config == C(w=25.0)
+    assert "w: 25.0  # 10 × 3 − 5" in capsys.readouterr().err
+    hexid = r.context.dir.name[20:28]
+    b = exp.main(["--branch", hexid, "w/=5", "n+=1", f"--root={tmp_path}"])
+    assert b.config == C(w=5.0, n=5)                  # on the parent's value
+    with pytest.raises(SystemExit, match="is an int"):
+        exp.main(["n*=1.1", f"--root={tmp_path}"])

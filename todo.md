@@ -49,6 +49,10 @@
   once; vars alone are set in-process; `meta.yaml` records `launch`. Open: the
   `project` key, a check under `python -m` (proposals.md).
 
+- [x] **changing a number from the command line** -- `key+=v`, `key-=v`, `key*=v`,
+  `key/=v` on the value the other layers give (for a branch, the parent's); the
+  banner shows how it came about.
+
 - [x] **dict fields: merge overrides into the default** -- a `dict` config field was
   *replaced* by a CLI override (`_schedule.env.w_support.start=2e6` left a dict with
   only that leaf), unlike nested dataclasses, where c463d87 applies overrides to the

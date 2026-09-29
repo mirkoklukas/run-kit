@@ -132,10 +132,16 @@ def _kv(rows):
     return grid
 
 
-def _cfg_block(cfg):
-    """Render a plain (already-serialized) cfg dict as a yaml syntax block."""
-    text = yaml.safe_dump(cfg, sort_keys=False).strip() or "{}"
-    return Syntax(text, "yaml", background_color="default")
+def _cfg_block(cfg, derived=None):
+    """Render a plain (already-serialized) cfg dict as a yaml syntax block. A key
+    in `derived` (`key*=2` on the command line) gets how its value came about as
+    a comment: `env.w_support: 30.0  # 15 × 2`."""
+    lines = (yaml.safe_dump(cfg, sort_keys=False).strip() or "{}").splitlines()
+    for key, how in (derived or {}).items():
+        for i, l in enumerate(lines):
+            if l.startswith(f"{key}:"):
+                lines[i] = f"{l}  # {how}"
+    return Syntax("\n".join(lines), "yaml", background_color="default")
 
 
 def opened(*, name, verb, run_dir):
@@ -197,7 +203,7 @@ def _launch_text(launch):
 
 
 def run_started(*, name, run_id, run_dir, tag, changes, n_fields, launch=None,
-                branch=None, against="defaults"):
+                branch=None, against="defaults", derived=None):
     """Print the start banner: which run, where it writes, how it was launched,
     what it changes -- a title line, then a label / value block, no frame.
     `branch`: where a branch starts (`a3f9c1e7:best (3.0M steps)`); its changes
@@ -213,7 +219,7 @@ def run_started(*, name, run_id, run_dir, tag, changes, n_fields, launch=None,
         config = Text(f"all {n_fields} fields {same}", style="dim")
     else:
         note = f"{rest} more {same} · " if rest else ""
-        config = Group(_cfg_block(changes), f"[dim]{note}the full resolved config is "
+        config = Group(_cfg_block(changes, derived), f"[dim]{note}the full resolved config is "
                                             f"in the run dir's config.yaml[/dim]")
     rows = [("id", run_id), *([("tag", tag)] if tag else []),
             ("dir", short_path(run_dir)),

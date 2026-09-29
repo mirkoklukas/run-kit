@@ -320,7 +320,7 @@ def _lineage(ckpt):
             **({"steps": ckpt.info["steps"]} if "steps" in ckpt.info else {})}
 
 
-def _announce(name, cfg, ctx, tag, branch=None):
+def _announce(name, cfg, ctx, tag, branch=None, derived=None):
     """Print a one-time start banner: which run, where, and what it changes.
 
     Only fields that differ from the defaults are echoed -- for a branch, from
@@ -332,7 +332,8 @@ def _announce(name, cfg, ctx, tag, branch=None):
     ui.run_started(name=name, run_id=ctx.id, run_dir=ctx.dir, tag=tag,
                    changes=changes, n_fields=n_fields, launch=_launch(),
                    branch=_branch_text(branch) if branch is not None else None,
-                   against="the parent" if parent is not None else "defaults")
+                   against="the parent" if parent is not None else "defaults",
+                   derived=derived)
 
 
 def _parent_cfg(cfg, ckpt):
@@ -481,13 +482,14 @@ def _run_wrapper(f, name):
     takes_branch = "branch" in inspect.signature(f).parameters
 
     @functools.wraps(f)
-    def wrapper(cfg, *, tag=None, root=None, follow=None, branch=None):
+    def wrapper(cfg, *, tag=None, root=None, follow=None, branch=None, _derived=None):
+        # `_derived`: how `key*=2` values came about, for the banner (from autocli)
         root = resolve_root(script, script.stem, explicit=root)
         follow = resolve_follow(script, script.stem, explicit=follow)
         branch = _branch_checkpoint(wrapper, branch, root)
         ctx = init_run(cfg, name=name, tag=tag, root=root, script=script,
                        module=module, branch=branch)
-        _announce(name, cfg, ctx, tag, branch)
+        _announce(name, cfg, ctx, tag, branch, derived=_derived)
         started, t0 = datetime.datetime.now(), time.monotonic()
         ctx._live = _Live(t0=t0, started=_stamp(started))   # live: the body may write into the run
         if follow is not None:               # print this stream's rows as they are recorded

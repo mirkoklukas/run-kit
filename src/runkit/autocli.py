@@ -20,13 +20,15 @@ Two disjoint namespaces (see design.md):
   --flag[=value] -> staging flags   (the "how/where": tag, root)
 
 Resolution (cfg): dataclass defaults -> config.yaml -> CLI key=value. last wins.
-A branch starts from its parent's config.yaml instead of the defaults.
+A branch starts from its parent's config.yaml instead of the defaults. Then
+`key+=v`, `key-=v`, `key*=v`, `key/=v` change a number, left to right.
 """
 import dataclasses
 import inspect
 import sys
 
-from .config import annotated_cfg, build_cfg, deep_merge, parse_overrides, split_argv
+from .config import (annotated_cfg, apply_ops, build_cfg, deep_merge, parse_overrides,
+                     split_argv, split_ops)
 from .utils import load_yaml, resolve_config_path
 
 VERBS = ("run", "eval", "viz")
@@ -85,7 +87,8 @@ def _dispatch(name, roles, argv):
         sys.exit(str(e))
 
     if verb == "run":
-        return fn(cfg, **flags)             # flags are exactly the staging kwargs
+        cfg, derived = cfg
+        return fn(cfg, _derived=derived, **flags)   # flags are exactly the staging kwargs
     try:
         return fn(which, **flags)
     except RunNotFound as e:                # the selection, not the body, failed
@@ -149,7 +152,7 @@ def _heal_latest(run_dir):
 
 
 def _run_args(run, argv):
-    """argv -> (cfg, staging flags) for the run verb.
+    """argv -> ((cfg, derived), staging flags) for the run verb.
 
     With `--branch`, the checkpoint is found here (and handed on as a
     `Checkpoint`): the config starts from the parent's `config.yaml` rather than
@@ -168,8 +171,10 @@ def _run_args(run, argv):
         flags["branch"] = _branch(run, flags["branch"], flags.get("root"))
         parent = load_yaml(flags["branch"].run / "config.yaml")
     base = deep_merge(parent, load_yaml(config_file)) if config_file else parent
-    cfg = build_cfg(_cfg_type(run), deep_merge(base, parse_overrides(cfg_tokens)))
-    return cfg, flags
+    sets, ops = split_ops(cfg_tokens)
+    cfg = build_cfg(_cfg_type(run), deep_merge(base, parse_overrides(sets)))
+    # `key*=2`: on the value the layers above give -- for a branch, the parent's
+    return apply_ops(cfg, ops), flags
 
 
 def _branch(run, which, root):
@@ -234,7 +239,7 @@ def _staging_flags(fn):
     """
     sig = inspect.signature(fn, follow_wrapped=False)
     return {p.name for p in sig.parameters.values()
-            if p.kind == inspect.Parameter.KEYWORD_ONLY}
+            if p.kind == inspect.Parameter.KEYWORD_ONLY and not p.name.startswith("_")}
 
 
 def _cfg_type(run):
@@ -289,7 +294,8 @@ def _help_text(name, verb, fn, roles):
         "",
         f"experiment: {name}   (cfg: {cfg_cls.__name__}; verbs: {verbs}; default: run)",
         "",
-        "config overrides (bare key=value):",
+        "config overrides (bare key=value; key+=v, key-=v, key*=v, key/=v change a",
+        "number -- quote a * for zsh: 'env.w*=2'):",
     ]
     for fld in dataclasses.fields(cfg_cls):
         lines.append(f"  {fld.name}={fld.default!r}")

@@ -76,6 +76,86 @@ def parse_overrides(tokens):
     return out
 
 
+# `key+=v`, `key-=v`, `key*=v`, `key/=v`: change a number instead of setting it
+OPS = {"+": lambda a, b: a + b, "-": lambda a, b: a - b,
+       "*": lambda a, b: a * b, "/": lambda a, b: a / b}
+_SYMBOL = {"+": "+", "-": "−", "*": "×", "/": "÷"}
+
+
+def split_ops(tokens):
+    """Split `key=value` tokens into (plain ones, operations): `env.w*=2` is the
+    operation ("env.w", "*", "2"). Keys never end in `+ - * /`, so the character
+    before the first `=` says which it is; `x=-5` stays a plain negative value."""
+    sets, ops = [], []
+    for t in tokens:
+        key, sep, raw = t.partition("=")
+        if sep and len(key) > 1 and key[-1] in OPS:
+            ops.append((key[:-1], key[-1], raw))
+        else:
+            sets.append(t)
+    return sets, ops
+
+
+def apply_ops(cfg, ops):
+    """Apply `(key, op, value)` operations to a built config, left to right, each
+    to the value the key has at that point. -> (the new config, {key: how its
+    value came about, e.g. "15 × 2"}).
+
+    Numbers only: a key whose value is not a number (a string, a bool, None) is
+    an error, as is a value that is not one. An `int` field stays an int -- a
+    result that is not whole is an error rather than being cut."""
+    derived = {}
+    for key, op, raw in ops:
+        value = _coerce(raw)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"{key}{op}={raw}: {raw!r} is not a number")
+        path = key.split(".")
+        current, is_int = _leaf(cfg, path, key)
+        if isinstance(current, bool) or not isinstance(current, (int, float)):
+            raise ValueError(f"{key}{op}={raw}: {key} is {current!r}, not a number")
+        if op == "/" and value == 0:
+            raise ValueError(f"{key}{op}={raw}: division by zero")
+        new = OPS[op](current, value)
+        if is_int:
+            if not float(new).is_integer():
+                raise ValueError(f"{key}{op}={raw}: {key} is an int, and "
+                                 f"{_show(current)} {_SYMBOL[op]} {_show(value)} = {new:g}")
+            new = int(new)
+        nested = {}
+        _set_dotted(nested, path, new)
+        cfg = build_cfg(type(cfg), nested, base=cfg)
+        before = derived.get(key, _show(current))
+        if op in "*/" and any(f" {c} " in before for c in "+−"):
+            before = f"({before})"                       # left to right, as written
+        derived[key] = f"{before} {_SYMBOL[op]} {raw}"
+    return cfg, derived
+
+
+def _leaf(cfg, path, key):
+    """The value at a dotted path of a config (through nested configs and dict
+    fields), and whether it is an `int` -- by the field's annotation where there
+    is one (`w: float = 5` is a float), else by the value (inside a dict)."""
+    obj, hint = cfg, None
+    for i, part in enumerate(path):
+        if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+            hints = typing.get_type_hints(type(obj))
+            if part not in hints:
+                raise ValueError(f"{key}: unknown field {'.'.join(path[:i + 1])!r}")
+            hint, obj = _unwrap_optional(hints[part]), getattr(obj, part)
+        elif isinstance(obj, dict):
+            if part not in obj:
+                raise ValueError(f"{key}: no {'.'.join(path[:i + 1])!r} to change")
+            hint, obj = None, obj[part]
+        else:
+            raise ValueError(f"{key}: {'.'.join(path[:i])!r} is {obj!r}, it has no fields")
+    is_int = hint is int if hint is not None else isinstance(obj, int)
+    return obj, is_int
+
+
+def _show(v):
+    return f"{v:g}" if isinstance(v, float) else str(v)
+
+
 def _set_dotted(d, path, value):
     for p in path[:-1]:
         d = d.setdefault(p, {})
