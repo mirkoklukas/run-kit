@@ -242,28 +242,33 @@ def _duration(seconds):
     return f"{h}h {m:02d}m"
 
 
-def checkpoint_saved(*, path, elapsed_s, info, progress=None, total=None, summary=None):
+def checkpoint_saved(*, path, elapsed_s, info, progress=None, total=None, changes=None,
+                     table=None):
     """Lines when a checkpoint is complete: its folder (relative to the run dir),
-    how far into the run, the progress and its info; then, per metrics stream
-    the run recorded to since the last checkpoint (`run` first), those rows --
-    means, and counters by their last value. Each shortened if long."""
+    how far into the run, the progress and its info; then how the followed
+    stream moved since the last checkpoint (`changes`, see
+    `metrics.window_changes`) -- a `Δ` row under the table's columns when a
+    table shows that stream (`table`, which then names its columns again before
+    the next row), else one line of `key +change`."""
     text = f"[cyan]◆[/cyan] checkpoint  {escape(path)}  [dim]at {_duration(elapsed_s)}"
     if progress is not None or total:
         text += "  " + escape(_progress_text(progress or 0, total))
     if info:
         text += "  " + escape(_clip("  ".join(f"{k}={_num(v)}" for k, v in info.items())))
     line(text + "[/dim]")
-    summary = summary or {}
-    if "rows" in summary:                    # one stream's summary, as older records have
-        summary = {"run": summary}
-    width = max((len(s) for s in summary), default=0)
-    for stream, s in summary.items():
-        means = "  ".join(f"{k} {_num(v)}" for k, v in s["mean"].items())
-        lasts = "  ".join(f"{k} {_num(v)}" for k, v in s["last"].items())
-        rows = s["rows"]
-        body = "  ·  ".join(p for p in (means, lasts) if p)
-        line(f"[dim]  {escape(stream.ljust(width))}  {rows} row{'s' if rows != 1 else ''} "
-             f"since the last: {escape(_clip(body, 100))}[/dim]")
+    if table is not None:
+        if not changes or not table.changes(changes):
+            table.interrupt()
+        return
+    if changes:
+        line("[dim]  Δ  " + escape("  ".join(f"{k} {_signed(v)}" for k, v in changes.items()))
+             + "[/dim]")
+
+
+def _signed(v):
+    """A change, compact and always signed: +2.3, -0.004, +246k, +0."""
+    text = _num(v)
+    return text if text.startswith("-") else f"+{text}"
 
 
 def _progress_text(progress, total):

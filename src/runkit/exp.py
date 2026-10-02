@@ -56,6 +56,10 @@ class _Live:
     windows: dict = dataclasses.field(default_factory=dict)   # per stream: rows since the last checkpoint
     follow: str | None = None          # the stream printed as it is recorded (--follow)
     table: object = None               # ... and the table that prints it
+    # the rows of the followed stream (`run` without one) since the last checkpoint,
+    # and the row before them: what a checkpoint prints the changes of
+    since: list = dataclasses.field(default_factory=list)
+    before: dict | None = None
 
 
 

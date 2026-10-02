@@ -504,7 +504,6 @@ leaves only what the body prints. A run is bracketed by two things:
             2 more at their defaults · the full resolved config is in the run dir's config.yaml
 ...whatever the body prints...
   ◆ checkpoint  checkpoints/best  at 2m 40s  64k / 100k  64%  ep_return=20.7
-    run  20 rows since the last: ep_return 18.4  loss 0.021  ·  it 260  steps 64k
   ✓ baseline_a3f9c1e7  ok in 3m 12s  → runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a
 ```
 
@@ -535,8 +534,8 @@ terminal — `_elapsed_s`, the keys, groups under one header, compact numbers:
 ```
 _elapsed_s       it    steps  ep_return   ep_len      vx
     9m 22s      194    2.38M       28.5      500  0.0623
-  ◆ checkpoint  checkpoints/current  at 9m 24s  2.39M / 10M  24%
-    run  20 rows since the last: ep_return 28.3  ep_len 500  ·  it 194  steps 2.38M
+  ◆ checkpoint  checkpoints/current  at 9m 24s  2.39M / 10M  24%  it=194  steps=2.39M
+         Δ      +20    +246k       +2.3       +0  +0.012
 _elapsed_s       it    steps  ep_return   ep_len      vx
     9m 25s      195     2.4M       28.6      500  0.0616
   ◇ support ramp starts  steps=2.4M
@@ -814,13 +813,28 @@ is an error, a field it gained takes its default.
   written by another process (an `eval` run later) are not in it: they were not
   recorded while the run went.
 - **It says so in the terminal**, once complete — where it is, how far the run
-  got, and the summary:
+  got and its `info`; then, under the table's columns, how each key of the
+  followed stream (`run` by default) moved since the last checkpoint:
 
   ```
+  _elapsed_s       it    steps  ep_return   ep_len      vx    duty
+     1h 12m      260    2.66M       20.7      500  0.0921   0.537
     ◆ checkpoint  checkpoints/current  at 1h 12m  2.66M / 10M  27%  ep_return=20.7
-      run     20 rows since the last: ep_return 18.4  ep_len 500  ·  it 260  steps 2.66M
-      reward  20 rows since the last: lin 0.039  yaw 0.06  slip -0.016  ·  it 260
+           Δ      +20    +246k       +2.3       +0  +0.012  -0.031
+  _elapsed_s       it    steps  ep_return   ep_len      vx    duty
   ```
+
+  A counter (integers, strictly increasing: `it`, `steps`) by how far it
+  advanced since the row before the window; anything else by its trend, as
+  `runkit metrics info` gives it — the later half's mean minus the earlier
+  half's (last minus first with fewer than 4 values), since a single first and
+  last row of noisy metrics are mostly noise. Signs stay neutral: runkit
+  cannot know whether up is good. Then the header comes again. With
+  `--follow=none` there is no table to line up with, and the changes of `run`
+  are one line, `Δ  ep_return +2.3  vx +0.012 ...`. The other streams' summaries
+  are in `checkpoint.yaml`, not printed (and `runkit metrics info RUN reward:`
+  with `--start` / `--end` at checkpoint names gives any stretch of them). `runkit metrics follow` from another terminal
+  prints the same, from the rows between the two checkpoints' recorded counts.
 - **Reading back** works on any context: `ctx.checkpoints()`, or
   `load_checkpoints(run_dir)`, gives the complete ones as `Checkpoint`s, oldest
   first; `select_checkpoint(root, name, which)` picks one as `eval` and
@@ -1108,7 +1122,7 @@ as it is written, from any terminal or machine that sees the run dir:
         1.2s     3      0.25
         1.5s     4       0.2
   ◆ checkpoint  checkpoints/current  at 1.5s  5 / 12  42%
-    run  5 rows since the last: loss 0.457  ·  it 4
+           Δ    +5    -0.567
   _elapsed_s    it      loss
         1.8s     5     0.167
   ✓ slow_5a35d412  ok in 3.7s  → runs/slow/latest

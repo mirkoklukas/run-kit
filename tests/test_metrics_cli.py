@@ -340,6 +340,45 @@ def test_follow_orders_notes_and_rows(tmp_path, monkeypatch):
     assert printed == [9, 10, "N", 11]
 
 
+def test_follow_prints_a_checkpoints_changes_under_the_columns(tmp_path, capsys):
+    """From another terminal too: the rows between the checkpoint already there
+    and the new one (by the row counts they recorded) give the Δ row."""
+    d = _live_run(tmp_path)                                    # rows 0..11, loss 1/(i+1)
+    old = d / "checkpoints" / "old"
+    old.mkdir(parents=True)
+    (old / "checkpoint.yaml").write_text(yaml.safe_dump(
+        {"index": 1, "name": "old", "elapsed_s": 7, "metrics": {"run": 8}}))
+    _set_status(d, "running", checkpoint="checkpoints/old")   # rows 8..11 come after it
+    polls = []
+
+    def sleep(_):
+        polls.append(1)
+        if len(polls) == 1:
+            new = d / "checkpoints" / "new"
+            new.mkdir()
+            (new / "checkpoint.yaml").write_text(yaml.safe_dump(
+                {"index": 2, "name": "new", "elapsed_s": 12, "metrics": {"run": 12}}))
+            _set_status(d, "running", checkpoint="checkpoints/new")
+        else:
+            _set_status(d, "ok", checkpoint="checkpoints/new")
+
+    follow(d, sleep=sleep)
+    out = capsys.readouterr().out.splitlines()
+    delta = [l.split() for l in out if l.split()[:1] == ["Δ"]]
+    # it 8..11 after 7: +4; loss 1/9 1/10 | 1/11 1/12: about -0.0184
+    assert delta == [["Δ", "+4", "-0.0184"]]
+
+
+def test_window_changes():
+    from runkit.metrics import window_changes
+    rows = [{"_elapsed_s": 1, "it": i, "steps": 100 * (i + 1), "x": float(i), "s": "t"}
+            for i in range(6)]
+    assert window_changes(rows) == {"it": 6, "steps": 600, "x": 3.0}
+    assert window_changes(rows[3:], before=rows[2]) == {"it": 3, "steps": 300, "x": 2.0}
+    assert window_changes(rows[5:], before=rows[4]) == {"it": 1, "steps": 100}   # one row
+    assert window_changes([]) == {}
+
+
 def test_metrics_of_a_run_without_any(tmp_path, capsys):
     d = tmp_path / "r"
     d.mkdir()

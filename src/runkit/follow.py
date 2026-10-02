@@ -37,6 +37,7 @@ def follow(run_dir, stream="run", keys=None, *, first=None, poll=POLL_S, sleep=t
     table = _Table(keys)
     rows, offset = _read_from(path, 0)
     notes, notes_offset = _read_from(notes_path, 0) if notes_path else ([], 0)
+    history = list(rows)                    # every row of the stream: a checkpoint's changes
     count = len(rows)                       # rows of the stream so far, printed or not
     shown = rows[first if first is not None else slice(-10, None)]
     table.size(shown)                       # one header for the rows shown first
@@ -46,6 +47,17 @@ def follow(run_dir, stream="run", keys=None, *, first=None, poll=POLL_S, sleep=t
         notes = _notes_before(notes, row, table)
         table.row(row)
     seen = _checkpoint_seen(run_dir)
+    # where the next checkpoint's window starts: the row count the checkpoint
+    # already there recorded
+    start = [(_checkpoint_record(run_dir, _status(run_dir)) or {})
+             .get("metrics", {}).get(stream, 0) if seen else 0]
+
+    def checkpoint(status, rec):
+        end = (rec or {}).get("metrics", {}).get(stream, count)
+        _print_checkpoint(status, rec, table, history[start[0]:end],
+                          history[start[0] - 1] if start[0] > 0 else None)
+        start[0] = end
+
     while True:
         status = _status(run_dir)
         # a new checkpoint goes where it happened: after the row count it recorded
@@ -55,22 +67,23 @@ def follow(run_dir, stream="run", keys=None, *, first=None, poll=POLL_S, sleep=t
             seen = now
             pending = _checkpoint_record(run_dir, status)
         rows, offset = _read_from(path, offset)
+        history += rows
         if notes_path:
             more, notes_offset = _read_from(notes_path, notes_offset)
             notes += more
         at = (pending or {}).get("metrics", {}).get(stream, count)
         if pending is not None and at <= count:
-            _print_checkpoint(status, pending, table)
+            checkpoint(status, pending)
             pending = None
         for row in rows:
             notes = _notes_before(notes, row, table)
             table.row(row)
             count += 1
             if pending is not None and count >= at:
-                _print_checkpoint(status, pending, table)
+                checkpoint(status, pending)
                 pending = None
         if pending is not None:
-            _print_checkpoint(status, pending, table)
+            checkpoint(status, pending)
         notes = _notes_before(notes, None, table)        # the rest: after the last row
         if status.get("status") != "running":
             _print_end(run_dir, status)
@@ -154,6 +167,25 @@ class _Table:
                 self.widths[k] = need
                 self.since_header = None
         return order, cells
+
+    def changes(self, changes):
+        """A `Δ` row under the columns: how each shown key moved since the last
+        checkpoint. Only once the table has a header to line up with; the next
+        row brings the header again. Returns whether it printed."""
+        if not self.headed or self.since_header is None:
+            return False
+        order = self._order()
+        cells = {k: ui._signed(changes[k]) if k in changes else "" for k in order}
+        cols = ["_elapsed_s", *order]
+        text = "  ".join(("Δ" if k == "_elapsed_s" else cells[k]).rjust(self.widths[k])
+                         for k in cols).rstrip()
+        console = ui.err if self.stderr else ui.out
+        if self.stderr:
+            ui._flush_stdout()
+        console.print(f"[dim]{text}[/dim]", markup=True, highlight=False, soft_wrap=True,
+                      crop=False)
+        self.interrupt()
+        return True
 
     def interrupt(self):
         """Other lines went between the rows (a checkpoint's): the next row
@@ -280,14 +312,17 @@ def _checkpoint_record(run_dir, status):
         return None
 
 
-def _print_checkpoint(status, rec, table):
+def _print_checkpoint(status, rec, table, window, before):
+    """A checkpoint's lines, with how the stream moved over `window` (its rows
+    since the checkpoint before; `before`, the row before them)."""
+    from .metrics import window_changes
     if not rec:
         return
-    table.interrupt()
     ui.checkpoint_saved(path=status.get("checkpoint"), elapsed_s=rec.get("elapsed_s") or 0,
                         info=rec.get("info"),
                         progress=rec.get("progress"), total=rec.get("total"),
-                        summary=rec.get("summary") or {})
+                        changes=window_changes(window, before), table=table)
+    table.interrupt()                          # the columns named again after it
 
 
 def _print_end(run_dir, status):

@@ -76,6 +76,8 @@ def append(ctx, stream, values):
         # but notes: events, not numbers to average
         if stream != NOTES:
             _add_to_window(ctx._live.windows.setdefault(stream, {}), row)
+        if stream == (ctx._live.follow or "run"):  # its changes are printed at checkpoints
+            ctx._live.since.append(row)
         if ctx._live.follow == stream:      # shown as it goes (--follow), best-effort
             try:
                 ctx._live.table.row(row)
@@ -280,6 +282,43 @@ def _trend(vals):
         return None
     half = len(vals) // 2
     return (vals[-half:].mean() - vals[:half].mean()).item()
+
+
+def window_changes(rows, before=None):
+    """How each key of a stream moved over `rows` (those since the last
+    checkpoint) -- what a checkpoint prints under the table's columns.
+
+    A counter (integers, strictly increasing: `it`, `steps`) by how far it
+    advanced: from `before` (the row before the window) if there is one, else
+    from its first value plus one typical step. Anything else numeric by its
+    trend, as `runkit metrics info` gives it: the later half's mean minus the
+    earlier half's (with fewer than 4 rows, last minus first). runkit's `_`
+    keys are left out. {key: change}; a key with too few values is missing.
+    """
+    out = {}
+    keys = dict.fromkeys(k for r in rows for k in r if not k.startswith(RESERVED_PREFIX))
+    for k in keys:
+        vals = [r[k] for r in rows if _is_number(r.get(k)) and r[k] == r[k]]
+        if not vals:
+            continue
+        prev = (before or {}).get(k)
+        prev = prev if _is_number(prev) else None
+        # a counter, judged with the row before: one row since the last
+        # checkpoint is still `it` 260 after 259
+        if _is_counter(([prev] if prev is not None else []) + vals):
+            out[k] = (vals[-1] - prev if prev is not None
+                      else vals[-1] - vals[0] + int(np.median(np.diff(vals))))
+            continue
+        if len(vals) < 2:
+            continue
+        trend = _trend(np.asarray(vals, dtype=float))
+        out[k] = trend if trend is not None else float(vals[-1] - vals[0])
+    return out
+
+
+def _is_counter(vals):
+    return (len(vals) >= 2 and all(isinstance(v, int) and not isinstance(v, bool) for v in vals)
+            and all(b > a for a, b in zip(vals, vals[1:])))
 
 
 def _series(spec):

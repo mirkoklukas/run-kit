@@ -146,13 +146,16 @@ class _Saving:
         # resume or an eval of an unfinished run would read
         ctx._live.checkpoint = f"{FOLDER}/{ckpt.name}"
         ctx._write_running()
+        live = ctx._live
+        since, before = live.since, live.before
+        live.since, live.before = [], (since[-1] if since else before)
         try:                                  # say so; best-effort, never costs the checkpoint
             from . import ui
-            ui.checkpoint_saved(path=ctx._live.checkpoint, elapsed_s=record["elapsed_s"],
+            from .metrics import window_changes
+            ui.checkpoint_saved(path=live.checkpoint, elapsed_s=record["elapsed_s"],
                                 info=record["info"], progress=record["progress"],
-                                total=record["total"], summary=record["summary"])
-            if ctx._live.table is not None:           # the run's own --follow table
-                ctx._live.table.interrupt()
+                                total=record["total"],
+                                changes=window_changes(since, before), table=live.table)
         except Exception:                                    # noqa: BLE001
             pass
         return False

@@ -230,9 +230,18 @@ def test_a_checkpoint_summarizes_the_rows_since_the_last_one(tmp_path, capsys):
     rec = _record(r.context.dir / "checkpoints" / "a")
     assert (rec["progress"], rec["total"]) == (40, 100) and rec["summary"]["run"]["rows"] == 4
 
-    err = "".join(capsys.readouterr().err.split())
+    lines = capsys.readouterr().err.splitlines()
+    err = "".join("".join(lines).split())
     assert "checkpoints/aat" in err and "40/10040%" in err
-    assert "4rowssincethelast:loss2.5ret1.67·it3steps40" in err
+    # under the table's columns (it, steps, loss, ret, note), how each moved since
+    # the last checkpoint: counters by their advance (it 0..3: +4), the rest by
+    # the later half's mean minus the earlier half's (loss 4 2 | 3 1: -1), or
+    # last minus first with fewer than 4 values (ret 0, 2, 3: +3); text: nothing
+    deltas = [l.split() for l in lines if l.split()[:1] == ["Δ"]]
+    assert deltas == [["Δ", "+4", "+40", "-1", "+3"],
+                      ["Δ", "+1", "+10"]]                       # b: from the row before
+    at = next(i for i, l in enumerate(lines) if l.split()[:1] == ["Δ"])
+    assert "checkpoints/a" in lines[at - 1] and lines[at + 1].split()[0] == "_elapsed_s"
 
 
 def test_a_checkpoint_summarizes_every_stream_the_run_recorded(tmp_path, capsys):
@@ -252,6 +261,8 @@ def test_a_checkpoint_summarizes_every_stream_the_run_recorded(tmp_path, capsys)
     assert ck["a"].summary["reward"] == {"rows": 4, "mean": {"lin": 0.4, "slip": -0.15000000000000002},
                                          "last": {"it": 3}}
     assert list(ck["b"].summary) == ["reward"]                 # nothing new in run
-    err = "".join(capsys.readouterr().err.split())
-    assert "run4rowssincethelast:ep_return1.5·it3" in err
-    assert "reward4rowssincethelast:lin0.4slip-0.15·it3" in err
+    lines = capsys.readouterr().err.splitlines()
+    # only the followed stream's changes are printed; every stream's summary is
+    # in checkpoint.yaml
+    assert [l.split() for l in lines if l.split()[:1] == ["Δ"]] == [["Δ", "+4", "+2"]]
+    assert not any("lin" in l or "slip" in l for l in lines)
