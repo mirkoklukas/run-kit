@@ -156,6 +156,16 @@ def note(message, values=None):
     line(f"◇ {escape(message)}" + (f"  [dim]{escape(_clip(kv))}[/dim]" if kv else ""))
 
 
+def eval_seed(seed, drawn):
+    """The line naming an eval's seed: drawn at random, given (`--seed`), or None
+    (`--seed=None`: the eval uses its own)."""
+    if seed is None:
+        line("[dim]seed none given (--seed=None): the eval's own[/dim]")
+        return
+    how = "random; repeat with --seed=" + str(seed) if drawn else "--seed"
+    line(f"[dim]seed {seed} ({escape(how)})[/dim]")
+
+
 def checkpoint_opened(ckpt, now=None):
     """The line under eval's header: which checkpoint, when it was saved (and how
     long ago), how far into its run, the progress, and its info."""

@@ -306,3 +306,39 @@ def test_old_eval_signature_still_opens_a_run(tmp_path):
 
     r = _go(exp, tmp_path, "lr=0.2")
     assert _go(exp, tmp_path, "eval") == (Cfg(lr=0.2), r.context.dir)
+
+
+# -- eval seed --------------------------------------------------------------------
+
+def test_eval_gets_a_seed_random_or_given(tmp_path, capsys):
+    """A body that declares `seed` gets `--seed` (an int, or None for `--seed=None`),
+    else a random int, shown under the header so the eval can be repeated. Without
+    `seed`, no flag."""
+    exp = Experiment("sd")
+
+    @exp.run
+    def run(cfg: Cfg, ctx: RunContext):
+        with ctx.checkpoint("current") as ckpt:
+            (ckpt.state / "x").write_text("1")
+
+    @exp.eval
+    def evaluate(ckpt, seed: int | None):
+        return seed
+
+    _go(exp, tmp_path)
+    capsys.readouterr()
+
+    assert _go(exp, tmp_path, "eval", "--seed=7") == 7
+    assert "seed 7 (--seed)" in capsys.readouterr().err
+
+    drawn = _go(exp, tmp_path, "eval")
+    assert isinstance(drawn, int) and 0 <= drawn < 2**31
+    assert f"seed {drawn} (random; repeat with --seed={drawn})" in capsys.readouterr().err
+
+    assert _go(exp, tmp_path, "eval", "--seed=None") is None      # the body's own
+    assert "seed none given" in capsys.readouterr().err
+
+    plain = _exp("plain")
+    _go(plain, tmp_path)
+    with pytest.raises(SystemExit, match="unknown flag"):
+        _go(plain, tmp_path, "eval", "--seed=7")

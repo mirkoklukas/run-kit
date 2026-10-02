@@ -19,6 +19,7 @@ import functools
 import inspect
 import os
 import pathlib
+import secrets
 import socket
 import sys
 import time
@@ -431,8 +432,10 @@ class Experiment:
 
     def eval(self, f):
         """Register `f(ckpt)` as the eval: it gets a checkpoint of a run
-        (`_checkpoint_wrapper`). The older `f(cfg, ctx)` opens a finished (`ok`)
-        run dir instead."""
+        (`_checkpoint_wrapper`). A body that also declares `seed` -- `f(ckpt,
+        seed)` -- gets `--seed` if given (an int, or None for `--seed=None`: the
+        body's own choice, e.g. the run's seed), else a fresh random int.
+        The older `f(cfg, ctx)` opens a finished (`ok`) run dir instead."""
         return self._register("eval", _eval_wrapper(f, self))
 
     def viz(self, f):
@@ -587,6 +590,9 @@ def _eval_wrapper(f, exp):
     return _checkpoint_wrapper(f, exp)
 
 
+_NOT_GIVEN = object()      # an eval's `seed` flag left out (None means `--seed=None`)
+
+
 def _checkpoint_wrapper(f, exp):
     """Wrap an eval body `f(ckpt)`: pick a checkpoint, call `f` with it.
 
@@ -597,18 +603,41 @@ def _checkpoint_wrapper(f, exp):
     latest complete checkpoint. The body gets the `Checkpoint`: it reads
     `ckpt.state`, writes into `ckpt.eval` (made here), and records with
     `runkit.record(ckpt.eval / "x.jsonl", ...)`. Returns what the body returns.
+
+    A body with a `seed` parameter -- `f(ckpt, seed)` -- makes the wrapper
+    `fn(which=None, *, root=None, seed=<not given>)` (so `--seed` is a flag). The
+    body gets the `--seed` given -- an int, or None for `--seed=None` (no seed from
+    runkit: the body falls back to its own, e.g. the run's `cfg.seed`) -- else a
+    fresh random int (31 bits, as `random_seed`). The seed is shown under the
+    header, so an eval can be repeated (`--seed=<it>`). What it seeds is the body's
+    choice (e.g. the env's reset).
     """
     script = pathlib.Path(f.__code__.co_filename).resolve()
 
-    @functools.wraps(f)
-    def wrapper(which=None, *, root=None):
+    def open_checkpoint(which, root):
         from .runs import select_checkpoint
         root = resolve_root(script, script.stem, explicit=root)
         ckpt = select_checkpoint(root, exp.name, which)
         ckpt.eval.mkdir(exist_ok=True)
         ui.opened(name=exp.name, verb="eval", run_dir=ckpt.dir)
         ui.checkpoint_opened(ckpt)
-        return f(ckpt)
+        return ckpt
+
+    if "seed" in inspect.signature(f).parameters:
+        @functools.wraps(f)
+        def wrapper(which=None, *, root=None, seed=_NOT_GIVEN):
+            ckpt = open_checkpoint(which, root)
+            drawn = seed is _NOT_GIVEN
+            if drawn:
+                seed = secrets.randbits(31)
+            elif seed is not None:
+                seed = int(seed)
+            ui.eval_seed(seed, drawn)
+            return f(ckpt, seed=seed)
+    else:
+        @functools.wraps(f)
+        def wrapper(which=None, *, root=None):
+            return f(open_checkpoint(which, root))
     wrapper._runkit_name = exp.name
     wrapper._runkit_script = script
     wrapper._runkit_dir = script.parent

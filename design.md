@@ -442,6 +442,20 @@ folder, `eval/` with it: the eval described a state that is gone. There is no
 parameter — `evaluate(cfg, ctx)`, from before — still gets a run instead, as
 `viz` does, and skips runs that are not `ok`.
 
+**An eval can take a seed.** A body that declares `seed` — `evaluate(ckpt,
+seed: int | None)` — gets:
+
+```
+(no --seed)     a fresh random int (31 bits, as `random_seed`)
+--seed=N        N
+--seed=None     None: runkit gives no seed, the body uses its own (the run's cfg.seed, say)
+```
+
+runkit shows it under the header (`seed 81723 (random; repeat with
+--seed=81723)`), so any eval can be repeated. What it seeds is the body's choice
+— the env's reset, say, so that evals of one checkpoint see different episodes.
+A body without `seed` has no `--seed` flag.
+
 **`runkit eval <checkpoint>` needs no experiment.** Named a run dir or a
 checkpoint in place of the experiment, `runkit eval` (and `viz`) find it in the
 run's `meta.yaml` — its `module`, when that can be imported from here, else its
