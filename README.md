@@ -39,7 +39,7 @@ Run it — with `python` the verb follows the file; with `runkit` it comes first
 ```bash
 python experiment.py [run] [config.yaml] [key=value ...] [--flag ...]
 python experiment.py viz [RUN]            # RUN: a run dir or hex prefix; default: latest
-python experiment.py eval [RUN]
+python experiment.py eval [RUN] [--seed=N]  # an eval with a `seed` param: random unless given
 runkit <verb> experiment.py ...           # runkit takes the verb first; or: some.module
 cd "$(runkit root)"                       # go where runs go
 cd "$(runkit latest experiment.py)"       # ... or to this experiment's latest run (or: root)
@@ -49,7 +49,8 @@ runkit metrics plot runs/baseline/latest       # ... plotted: every key, or name
 ```
 
 - bare `key=value` → overrides into **config** (the "what")
-- `--flag=value` → sets **staging** (the "how/where"): `--tag`, `--root`
+- `--flag=value` → sets **staging** (the "how/where"): `--tag`, `--root`; for an eval
+  whose body takes `seed`, `--seed=N` (or `--seed=None`: the body's own; see `design.md`)
 - without `--root`, runs go where the nearest `experiment.toml` says (`[env] root = ...`), else `./runs`
 - config paths resolve as `cwd:NAME` (default) / `exp:NAME` (next to the experiment) / `/abs`,
   plus user-defined `SCHEME:NAME` bases via `$RUNKIT_PATH_<SCHEME>` (e.g. `ctk:x.yaml` → `$RUNKIT_PATH_CTK/x.yaml`)
