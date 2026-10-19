@@ -1,22 +1,61 @@
 # runkit — design
 
-Lightweight, reproducible experiment runs. You write a `Config` and a
-`run(cfg, ctx)`; runkit turns the script into a CLI, gives every run a fresh
-self-describing directory, and records what the run was and how it went. Next to
-the run, an experiment can say how to evaluate one of its checkpoints and how to
-look at a run, and a run can be continued from a checkpoint as a new one.
-
-It is deliberately small. Features get added when a real need shows up, not
-before — there is no config composition, no server, no database, and no tracking
-UI. The run directory is the whole interface.
-
 Designs that are proposed but not built live in `proposals.md`.
+
+## Contents
+
+- [1. Overview](#1-overview)
+- [2. Experiments](#2-experiments)
+  - [2.1 An experiment](#21-an-experiment)
+  - [2.2 Running it](#22-running-it)
+  - [2.3 Arguments vs flags](#23-arguments-vs-flags)
+  - [2.4 Config resolution](#24-config-resolution)
+  - [2.5 Flags](#25-flags)
+  - [2.6 Where runs go: `experiment.toml`](#26-where-runs-go-experimenttoml)
+  - [2.7 Starting the process: `extras` and `vars`](#27-starting-the-process-extras-and-vars)
+  - [2.8 Verbs: run, eval, viz](#28-verbs-run-eval-viz)
+  - [2.9 What it prints](#29-what-it-prints)
+  - [2.10 What lands on disk](#210-what-lands-on-disk)
+  - [2.11 Checkpoints](#211-checkpoints)
+  - [2.12 Branching: a new run from a checkpoint](#212-branching-a-new-run-from-a-checkpoint)
+  - [2.13 Progress and metrics](#213-progress-and-metrics)
+  - [2.14 What you get back](#214-what-you-get-back)
+  - [2.15 The two objects](#215-the-two-objects)
+  - [2.16 How it works](#216-how-it-works)
+  - [2.17 Run dir naming](#217-run-dir-naming)
+  - [2.18 The `Experiment`](#218-the-experiment)
+  - [2.19 Open](#219-open)
+- [3. `@rundir`: a run dir for any function](#3-rundir-a-run-dir-for-any-function)
+  - [3.1 What the body gets](#31-what-the-body-gets)
+  - [3.2 Where runs go: `runkit.toml`](#32-where-runs-go-runkittoml)
+  - [3.3 What lands on disk](#33-what-lands-on-disk)
+  - [3.4 Open](#34-open)
 
 ---
 
-## Usage
+## 1. Overview
 
-### An experiment
+runkit offers two things, independent of each other:
+
+- **Experiments** — the main feature. You write a `Config` and a `run(cfg,
+  ctx)`; runkit turns the script into a CLI, gives every run a fresh
+  self-describing directory, and records what the run was and how it went. Next
+  to the run, an experiment can say how to evaluate one of its checkpoints and
+  how to look at a run, and a run can be continued from a checkpoint as a new
+  one. See section 2.
+- **`@rundir`** — a decorator that gives each call of a plain function (a
+  script with its own command line, not an experiment) a fresh run dir, and
+  records the call and how it went. See section 3.
+
+It is deliberately small. Features get added when a real need shows up, not
+before — there is no config composition, no server, no database, and no
+tracking UI.
+
+---
+
+## 2. Experiments
+
+### 2.1 An experiment
 
 An experiment is a python file with an `Experiment`, a `Config` dataclass and
 a `run(cfg, ctx)` — plus, optionally, an eval and a viz:
@@ -77,7 +116,7 @@ if __name__ == "__main__":
     main(run)
 ```
 
-### Running it
+### 2.2 Running it
 
 ```bash
 python experiment.py                                  # dataclass defaults
@@ -99,7 +138,7 @@ runkit viz lab.baseline.experiment                    # ... or by module name
 runkit eval runs/baseline/latest/checkpoints/best     # ... or by path: the run names its experiment
 ```
 
-### Arguments vs flags
+### 2.3 Arguments vs flags
 
 The command line has exactly two namespaces, and they never touch each other:
 
@@ -147,7 +186,7 @@ YAML on purpose: `experiment.yaml` next to `config.yaml` files would read as
 "the experiment's config", and TOML is what tool settings use in python projects
 (`pyproject.toml`, `uv.toml`).
 
-### Config resolution
+### 2.4 Config resolution
 
 Three layers, last wins, then changes to numbers:
 
@@ -248,7 +287,7 @@ a dot, so `lr: 1e-4` in a file loads as the *string* `"1e-4"`. The `float`
 annotation on the field is what recovers it. The same repair covers ints written
 as `1e3`.
 
-### Flags
+### 2.5 Flags
 
 ```
 --tag=TAG        variant label; becomes part of the run dir name
@@ -275,7 +314,7 @@ experiment and is reachable through `latest`. Where a known path is needed,
 `{root}/{name}/latest` is one; where a scheduler hands out a folder, pass it as
 `--root`.
 
-### Where runs go: `experiment.toml`
+### 2.6 Where runs go: `experiment.toml`
 
 Without `--root`, the root comes from the nearest `experiment.toml` at or above
 the experiment's file, else `./runs` (relative to where you launch from):
@@ -294,7 +333,7 @@ to the folder holding `experiment.toml`, or uses a scheme prefix (`ctk:` →
 `$RUNKIT_PATH_CTK`, `exp:` → that same folder). `eval` and `viz` resolve it the
 same way, so they look where the run wrote.
 
-### Starting the process: `extras` and `vars`
+### 2.7 Starting the process: `extras` and `vars`
 
 The same file says how to start the process an experiment needs:
 
@@ -377,7 +416,7 @@ rkroot() { cd "$(runkit root "$@")"; }   # in ~/.zshrc
 From a folder it applies `[env]`; given an experiment file it also applies that
 file's `[env.<stem>]`, so it names exactly the root a run of it would use.
 
-### Verbs: run, eval, viz
+### 2.8 Verbs: run, eval, viz
 
 The first argument may name a verb; without one, it is `run`. The three roles
 form a pipeline over a run dir:
@@ -503,84 +542,7 @@ One catch: a bare first argument that is a verb is taken as the verb, so a
 config file named exactly `eval`, `viz`, `root` or `latest` (no extension)
 needs `--config=`.
 
-### Scripts: `@rundir`
-
-Not everything that wants a run dir is an experiment. A homing or calibration
-script has its own command line (typer, argparse) and no `Config`, but its
-calls are worth keeping just the same. `@rundir(name)` gives each call of a
-plain function a fresh run dir, and nothing else:
-
-```python
-from runkit import RunContext, rundir
-
-@rundir("homing")
-def main(leg: int = 0, *, run_dir: Path):     # or `*, ctx: RunContext`, or both
-    (run_dir / "home-state.yaml").write_text(...)
-
-if __name__ == "__main__":
-    typer.run(main)                           # argv stays the script's own
-```
-
-**It does not touch argv.** No `key=value`, no verbs, no `--tag`: the function
-keeps its own arguments, and the decorator only wraps the call -- make the run
-dir, record the call, run the body, record how it went.
-
-**The body chooses what it is handed, by parameter name**, as `@exp.run` finds
-`cfg` and `ctx`. Both must be keyword-only and have no default:
-
-- `run_dir: Path` -- the run dir itself (`ctx.dir`). The body uses it as it
-  likes; there is no `out/`.
-- `ctx: RunContext` -- a live context: `ctx.dir` is the run dir, `ctx.out` is
-  `{dir}/out`, and `ctx.record`, `ctx.progress`, `ctx.checkpoint` work as in
-  an experiment (so `runkit metrics follow` works on a script's run). `out/`
-  exists while the body runs and is **removed at the end if nothing was
-  written into it** -- for `@rundir` only; an experiment's `out/` stays.
-
-**The decorated function shows `run_dir: Path | None = None` instead**, and no
-`ctx`. A CLI built from the signature (typer) gets an optional `--run-dir`
-rather than a required argument; `None` -- the usual case -- means a fresh run
-dir, and a path means that folder, which must be new or empty (and gets no
-`latest`). Calling the undecorated body without `run_dir` fails loudly, which is
-the point of having no default in the source. A call that does not fit the
-signature raises before any run dir is made.
-
-**Where:** `{root}/{name}/{date}_{time}_{hex8}/`, with `latest` beside it -- the
-experiments' naming (see "Run dir naming"), without a tag. The root is `./runs`
-in the folder the script is *started from*, unless a `runkit.toml` there (only
-there, not above it) names another:
-
-```toml
-# runkit.toml
-runs = "runs"                  # relative to this folder; ~ is expanded
-
-[host.jetson]                  # this machine only: its hostname, or the
-runs = "/data/runs"            # hostname's first label (jetson.local -> jetson)
-```
-
-A `[host.<name>]` table matching the full hostname wins over one matching the
-first label, and either over the top level. `experiment.toml` is not read:
-it belongs to an experiment's folder, while a script's runs follow where you
-start it.
-
-**What it writes:**
-
-```
-runs/homing/2026-10-19_23-30-36_99f0bfc6/
-├── run_context.yaml   id + name
-├── meta.yaml          kind: rundir, script, module, argv, cwd, args, launch
-├── status.yaml        the same lifecycle as an experiment's run
-├── traceback.txt      only if the call raised
-├── retval.json        the return value, if not None
-└── ...                whatever the body writes (out/ only with ctx, only if used)
-```
-
-There is no `config.yaml`. `args` in `meta.yaml` is the call's arguments by
-name, defaults filled in -- plain data as is, a path as a string, anything else
-as its `repr`. `kind: rundir` tells these dirs from an experiment's. The
-decorated function returns what the body returns (not a `Run`), and an
-exception is recorded and propagates, as for an experiment.
-
-### What it prints
+### 2.9 What it prints
 
 runkit's own output goes to stderr, so stdout is the experiment's: `2>/dev/null`
 leaves only what the body prints. A run is bracketed by two things:
@@ -663,7 +625,7 @@ and how long ago, how far into the run, the progress and its `info` —
 branch's banner has a `branch` line — `a3f9c1e7:best (3.0M steps)` — and
 compares its config with the parent's.
 
-### What lands on disk
+### 2.10 What lands on disk
 
 ```
 runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a/
@@ -764,7 +726,7 @@ still exits non-zero with its own traceback. runkit records the outcome; it does
 not handle it. A `KeyboardInterrupt` is recorded as `interrupted` rather than
 `failed`, because you stopping it is not the same fact as it breaking.
 
-### Checkpoints
+### 2.11 Checkpoints
 
 A long run saves its state along the way, so a crash or a stop does not lose
 everything, and a run can be evaluated or resumed before it ends:
@@ -931,7 +893,7 @@ is an error, a field it gained takes its default.
   first; `select_checkpoint(root, name, which)` picks one as `eval` and
   `--branch` do.
 
-### Branching: a new run from a checkpoint
+### 2.12 Branching: a new run from a checkpoint
 
 Continue an earlier run — with a change, or none — as a new run, starting from
 one of its checkpoints:
@@ -1001,7 +963,7 @@ schedule's parameters moves to what the new one gives at that step.
 A branch records its own streams from its first row; its step count continues
 the parent's, so the two plot on one axis with `--x steps`.
 
-### Progress and metrics
+### 2.13 Progress and metrics
 
 Two more things a live run can report while it goes — how far along it is, and
 the numbers it produces:
@@ -1295,7 +1257,7 @@ goes to the run's `metrics/`, named by the arguments
 itself. The same from python: `plot_metrics(run_dir, ["loss"], x="steps")`, e.g.
 in a viz. matplotlib is a dependency, imported only when something is plotted.
 
-### What you get back
+### 2.14 What you get back
 
 Calling the experiment from python — a sweep, a notebook — returns a `Run`:
 
@@ -1319,9 +1281,7 @@ from runkit import load_run
 r = load_run("runs/baseline/latest", Config)   # the same Run, rebuilt from disk
 ```
 
----
-
-## The two objects
+### 2.15 The two objects
 
 ```python
 @dataclass
@@ -1378,9 +1338,7 @@ wrapper hands the body, false once the body returns and in any context opened
 from disk. It is not written to `run_context.yaml` and not part of comparing
 contexts, so `load_run(...) == run(...)` still holds.
 
----
-
-## How it works
+### 2.16 How it works
 
 The call at the bottom of the script, `exp.main()` (or `main(run)`), is the
 handoff into runkit. It reads an optional verb off the front of argv and passes
@@ -1414,7 +1372,7 @@ checkpoint (`select_checkpoint`), the wrapper makes its `eval/` and calls the
 body with the `Checkpoint`. runkit records nothing about either call itself;
 the body's output goes under `ctx.out` or `ckpt.eval`.
 
-### Run dir naming
+### 2.17 Run dir naming
 
 ```
 {root}/{name}/{date}_{time}_{hex8}[_{tag}]/
@@ -1467,7 +1425,7 @@ because its run was deleted, nothing is harmed. Nothing in runkit reads it; a
 tool that needs "the latest run" (e.g. the latest `ok` one) computes it from the
 dirs.
 
-### The `Experiment`
+### 2.18 The `Experiment`
 
 ```python
 exp = Experiment("baseline")
@@ -1495,9 +1453,7 @@ by default).
 whatever is registered on `run`'s experiment, and `eval=` / `viz=` take plain
 bodies.
 
----
-
-## Open
+### 2.19 Open
 
 - **retval dispatch.** `.npy` for an array, `.json` otherwise. Widen it (`.npz`
   for a dict of arrays?) and keep it best-effort, so a return value that will
@@ -1511,11 +1467,6 @@ bodies.
   in `status.yaml`.) A dirty-git gate would sit alongside it.
 - **captured stdout.** For a run that died on a cluster three days ago, the log
   is often the only thing you want, and the run dir has no equivalent today.
-- **`@rundir` follow-ups.** Capturing the call's output into `log.txt` (at the
-  file-descriptor level, so a C extension's or a subprocess's output is kept
-  too) is the natural first home for captured stdout. A tag (no argv slot: an
-  env var, or a keyword on the call), and what a `@rundir` call inside another
-  run records about its parent, wait for a case.
 - **the overrides, separately.** `config.yaml` records what the values *were*,
   not which came from a file and which from the command line.
 - **`config=` on the decorator.** A config the experiment ships with, as a path
@@ -1523,3 +1474,94 @@ bodies.
   already *is* the shipped default, so this needs a real motivating case first.
   If it happens it must be a stored attribute read during resolution, never a
   wrapper argument.
+
+---
+
+## 3. `@rundir`: a run dir for any function
+
+Not everything that wants a run dir is an experiment. A homing or calibration
+script has its own command line (typer, argparse) and no `Config`, but its
+calls are worth keeping just the same. `@rundir(name)` gives each call of a
+plain function a fresh run dir, and nothing else:
+
+```python
+from runkit import RunContext, rundir
+
+@rundir("homing")
+def main(leg: int = 0, *, run_dir: Path):     # or `*, ctx: RunContext`, or both
+    (run_dir / "home-state.yaml").write_text(...)
+
+if __name__ == "__main__":
+    typer.run(main)                           # argv stays the script's own
+```
+
+**It does not touch argv.** No `key=value`, no verbs, no `--tag`: the function
+keeps its own arguments, and the decorator only wraps the call -- make the run
+dir, record the call, run the body, record how it went. It returns what the
+body returns; an exception is recorded and propagates.
+
+### 3.1 What the body gets
+
+The body chooses by parameter name. Both are keyword-only and have no default:
+
+- `run_dir: Path` -- the run dir itself. The body uses it as it likes; there
+  is no `out/`.
+- `ctx: RunContext` -- a live context (see "The two objects"): `ctx.dir` is
+  the run dir, `ctx.out` is `{dir}/out`, and `ctx.record`, `ctx.progress`,
+  `ctx.checkpoint` work, so `runkit metrics follow` works on a script's run.
+  `out/` exists while the body runs and is **removed at the end if nothing was
+  written into it**.
+
+**The decorated function shows `run_dir: Path | None = None` instead**, and no
+`ctx`. A CLI built from the signature (typer) gets an optional `--run-dir`
+rather than a required argument. `None` -- the usual case -- means a fresh run
+dir; a path means that folder, which must be new or empty (and gets no
+`latest`). Calling the undecorated body without `run_dir` fails loudly, which is
+the point of having no default in the source. A call that does not fit the
+signature raises before any run dir is made.
+
+### 3.2 Where runs go: `runkit.toml`
+
+`{root}/{name}/{date}_{time}_{hex8}/`, with `latest` beside it -- the same
+naming as everywhere in runkit (see "Run dir naming"), without a tag. The root
+is `./runs` in the folder the script is *started from*, unless a `runkit.toml`
+there (only there, not above it) names another:
+
+```toml
+# runkit.toml
+runs = "runs"                  # relative to this folder; ~ is expanded
+
+[host.jetson]                  # this machine only: its hostname, or the
+runs = "/data/runs"            # hostname's first label (jetson.local -> jetson)
+```
+
+A `[host.<name>]` table matching the full hostname wins over one matching the
+first label, and either over the top level. `experiment.toml` is not read: it
+belongs to an experiment's folder, while a script's runs follow where you start
+it.
+
+### 3.3 What lands on disk
+
+```
+runs/homing/2026-10-19_23-30-36_99f0bfc6/
+├── run_context.yaml   id + name
+├── meta.yaml          kind: rundir, script, module, argv, cwd, args, launch
+├── status.yaml        running | ok | failed | interrupted, as for any run
+├── traceback.txt      only if the call raised
+├── retval.json        the return value, if not None
+└── ...                whatever the body writes (out/ only with ctx, only if used)
+```
+
+There is no `config.yaml`. `args` in `meta.yaml` is the call's arguments by
+name, defaults filled in -- plain data as is, a path as a string, anything else
+as its `repr`. `kind: rundir` tells these dirs from an experiment's.
+
+### 3.4 Open
+
+- **Captured output.** Teeing the call's output into `log.txt` -- at the
+  file-descriptor level, so a C extension's or a subprocess's output is kept
+  too -- is the natural first home for captured stdout.
+- **A tag.** There is no argv slot for one: an env var, or a keyword on the
+  call.
+- **Nesting.** What a `@rundir` call inside another run records about its
+  parent.
