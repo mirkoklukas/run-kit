@@ -44,8 +44,9 @@ runkit offers two things, independent of each other:
   how to look at a run, and a run can be continued from a checkpoint as a new
   one. See section 2.
 - **`@rundir`** — a decorator that gives each call of a plain function (a
-  script with its own command line, not an experiment) a fresh run dir, and
-  records the call and how it went. See section 3.
+  script with its own command line, not an experiment) a fresh run dir -- a
+  plain folder, or, if the function takes a `ctx`, a recorded run. See
+  section 3.
 
 It is deliberately small. Features get added when a real need shows up, not
 before — there is no config composition, no server, no database, and no
@@ -1484,7 +1485,7 @@ bodies.
 Not everything that wants a run dir is an experiment. A homing or calibration
 script has its own command line (typer, argparse) and no `Config`, but its
 calls are worth keeping just the same. `@rundir(name)` gives each call of a
-plain function a fresh run dir, and nothing else:
+plain function a fresh run dir:
 
 ```python
 from runkit import RunContext, rundir
@@ -1498,21 +1499,24 @@ if __name__ == "__main__":
 ```
 
 **It does not touch argv.** No `key=value`, no verbs, no `--tag`: the function
-keeps its own arguments, and the decorator only wraps the call -- make the run
-dir, record the call, run the body, record how it went. It returns what the
-body returns; an exception is recorded and propagates.
+keeps its own arguments, and the decorator only wraps the call. It returns
+what the body returns, and an exception propagates.
 
 ### 3.1 What the body gets
 
-The body chooses by parameter name. Both are keyword-only and have no default:
+The body chooses by parameter name, and that decides what runkit writes (see
+3.3). Both are keyword-only and have no default:
 
-- `run_dir: Path` -- the run dir itself. The body uses it as it likes; there
-  is no `out/`.
-- `ctx: RunContext` -- a live context (see "The two objects"): `ctx.dir` is
-  the run dir, `ctx.out` is `{dir}/out`, and `ctx.record`, `ctx.progress`,
-  `ctx.checkpoint` work, so `runkit metrics follow` works on a script's run.
-  `out/` exists while the body runs and is **removed at the end if nothing was
-  written into it**.
+- `run_dir: Path` -- **a fresh folder, and nothing in it.** runkit writes no
+  files; the folder is the body's.
+- `ctx: RunContext` -- **a recorded run.** A live context (see "The two
+  objects"): `ctx.dir` is the run dir, `ctx.out` is `{dir}/out`, and
+  `ctx.record`, `ctx.progress`, `ctx.checkpoint` work, so `runkit metrics
+  follow` works on a script's run. `out/` exists while the body runs and is
+  **removed at the end if nothing was written into it**.
+
+A body may take both; `run_dir` is then `ctx.dir`. Going from a folder to a
+recorded run is a one-word change in the signature.
 
 **The decorated function shows `run_dir: Path | None = None` instead**, and no
 `ctx`. A CLI built from the signature (typer) gets an optional `--run-dir`
@@ -1544,19 +1548,33 @@ it.
 
 ### 3.3 What lands on disk
 
+**With `run_dir` alone, nothing of runkit's.** The folder holds only what the
+body writes; its name is the record -- the date, the time and the id's hex.
+
+**With `ctx`, a run dir like an experiment's**, file for file and with the same
+meaning per file:
+
 ```
-runs/homing/2026-10-19_23-30-36_99f0bfc6/
-├── context.yaml       id + name
-├── meta.yaml          kind: rundir, script, module, argv, cwd, args, launch
+runs/calib/2026-10-19_23-30-36_4e1d07b2/
+├── config.yaml        the call's arguments -- what it ran with
+├── context.yaml       id + name -- what it ran as
+├── meta.yaml          kind: rundir, script, module, argv, cwd, launch
 ├── status.yaml        running | ok | failed | interrupted, as for any run
 ├── traceback.txt      only if the call raised
 ├── retval.json        the return value, if not None
-└── ...                whatever the body writes (out/ only with ctx, only if used)
+├── checkpoints/       only if the body used ctx.checkpoint
+├── metrics/           only if the body used ctx.record
+├── out/               ctx.out, only if something was written into it
+└── ...                whatever else the body writes into ctx.dir
 ```
 
-There is no `config.yaml`. `args` in `meta.yaml` is the call's arguments by
-name, defaults filled in -- plain data as is, a path as a string, anything else
-as its `repr`. `kind: rundir` tells these dirs from an experiment's.
+`config.yaml` is the call's arguments by name, defaults filled in -- what a
+`Config` is for an experiment. Unlike an experiment's, it is a record only, not
+something to load back: plain data is kept as is, a path as a string, anything
+else as its `repr`. `meta.yaml` is how the call was started; `kind: rundir`
+tells these dirs from an experiment's. `context.yaml` is what `runkit metrics`
+recognizes a run dir by, and `status.yaml` is what `ctx.progress` and
+`ctx.checkpoint` write and `metrics follow` watches for the end.
 
 ### 3.4 Open
 

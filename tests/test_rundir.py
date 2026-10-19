@@ -34,16 +34,8 @@ def test_fresh_run_dir_under_cwd_runs(cwd):
     assert (d / "state.txt").read_text() == "0"
     assert not (d / "out").exists()                  # run_dir form: no out/
     assert (cwd / "runs" / "homing" / "latest").resolve() == d
-    meta = _load(d / "meta.yaml")
-    assert meta["kind"] == "rundir"
-    assert meta["args"] == {"leg": 0, "speed": 1.0}
-    assert meta["cwd"] == str(cwd)
-    status = _load(d / "status.yaml")
-    assert status["status"] == "ok"
-    ctx = _load(d / "context.yaml")
-    assert ctx["name"] == "homing" and ctx["id"].startswith("homing_")
-    assert (d / "retval.json").is_file()
-    assert not (d / "config.yaml").exists()          # no Config: nothing to freeze
+    # run_dir form: a fresh folder, and only what the body wrote in it
+    assert {p.name for p in d.iterdir()} == {"state.txt"}
 
 
 def test_ctx_form_removes_empty_out(cwd):
@@ -89,13 +81,46 @@ def test_explicit_run_dir(cwd, tmp_path):
 
     @rundir("homing")
     def main(*, run_dir):
+        (run_dir / "x.txt").write_text("x")
         return run_dir
 
     assert main(run_dir=target) == target.resolve()
-    assert _load(target / "status.yaml")["status"] == "ok"
+    assert (target / "x.txt").is_file()
     assert not (cwd / "runs").exists()               # no fresh dir, no latest
     with pytest.raises(FileExistsError):             # not empty any more
         main(run_dir=target)
+
+
+def test_ctx_form_is_a_recorded_run(cwd):
+    @rundir("calib")
+    def main(leg: int, speed: float = 1.0, *, ctx):
+        return ctx.dir
+
+    d = main(2)
+    assert _load(d / "config.yaml") == {"leg": 2, "speed": 1.0}   # the call's arguments
+    assert _load(d / "context.yaml") == {"id": f"calib_{d.name.split('_')[2]}",
+                                         "name": "calib"}
+    assert _load(d / "status.yaml")["status"] == "ok"
+    meta = _load(d / "meta.yaml")
+    assert meta["kind"] == "rundir" and meta["cwd"] == str(cwd)
+    assert "args" not in meta and "id" not in meta
+    assert (d / "retval.json").is_file()
+    assert {p.name for p in d.iterdir()} == {"config.yaml", "context.yaml", "meta.yaml",
+                                             "status.yaml", "retval.json"}
+
+
+def test_run_dir_form_failure_writes_nothing(cwd):
+    seen = {}
+
+    @rundir("boom")
+    def main(*, run_dir):
+        seen["dir"] = run_dir
+        raise ValueError("bad leg")
+
+    with pytest.raises(ValueError, match="bad leg"):
+        main()
+    d = seen["dir"]
+    assert list(d.iterdir()) == []                   # the exception is the record
 
 
 def test_failure_is_recorded_and_raised(cwd):

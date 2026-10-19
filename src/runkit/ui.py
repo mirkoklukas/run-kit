@@ -315,8 +315,9 @@ def _clip(text, n=80):
     return text if len(text) <= n else text[:n - 3] + "..."
 
 
-def run_finished(*, run_id, status, duration_s, error, run_dir):
-    """One line at the end of a run: how it went, how long, where it is."""
+def run_finished(*, run_id, status, duration_s, error, run_dir, traceback=True):
+    """One line at the end of a run: how it went, how long, where it is.
+    `traceback`: a failed run points at its traceback.txt (False: there is none)."""
     dur, where = _duration(duration_s), escape(short_path(run_dir))
     if status == "ok":
         ok(f"{run_id}  [green]ok[/green] in {dur}  [dim]→ {where}[/dim]")
@@ -324,4 +325,4 @@ def run_finished(*, run_id, status, duration_s, error, run_dir):
         warn(f"{run_id}  [yellow]interrupted[/yellow] after {dur}  [dim]→ {where}[/dim]")
     else:
         fail(f"{run_id}  [red]failed[/red] after {dur}  ({escape(str(error))})  "
-             f"[dim]→ {where}/traceback.txt[/dim]")
+             f"[dim]→ {where}{'/traceback.txt' if traceback else ''}[/dim]")
