@@ -503,6 +503,83 @@ One catch: a bare first argument that is a verb is taken as the verb, so a
 config file named exactly `eval`, `viz`, `root` or `latest` (no extension)
 needs `--config=`.
 
+### Scripts: `@rundir`
+
+Not everything that wants a run dir is an experiment. A homing or calibration
+script has its own command line (typer, argparse) and no `Config`, but its
+calls are worth keeping just the same. `@rundir(name)` gives each call of a
+plain function a fresh run dir, and nothing else:
+
+```python
+from runkit import RunContext, rundir
+
+@rundir("homing")
+def main(leg: int = 0, *, run_dir: Path):     # or `*, ctx: RunContext`, or both
+    (run_dir / "home-state.yaml").write_text(...)
+
+if __name__ == "__main__":
+    typer.run(main)                           # argv stays the script's own
+```
+
+**It does not touch argv.** No `key=value`, no verbs, no `--tag`: the function
+keeps its own arguments, and the decorator only wraps the call -- make the run
+dir, record the call, run the body, record how it went.
+
+**The body chooses what it is handed, by parameter name**, as `@exp.run` finds
+`cfg` and `ctx`. Both must be keyword-only and have no default:
+
+- `run_dir: Path` -- the run dir itself (`ctx.dir`). The body uses it as it
+  likes; there is no `out/`.
+- `ctx: RunContext` -- a live context: `ctx.dir` is the run dir, `ctx.out` is
+  `{dir}/out`, and `ctx.record`, `ctx.progress`, `ctx.checkpoint` work as in
+  an experiment (so `runkit metrics follow` works on a script's run). `out/`
+  exists while the body runs and is **removed at the end if nothing was
+  written into it** -- for `@rundir` only; an experiment's `out/` stays.
+
+**The decorated function shows `run_dir: Path | None = None` instead**, and no
+`ctx`. A CLI built from the signature (typer) gets an optional `--run-dir`
+rather than a required argument; `None` -- the usual case -- means a fresh run
+dir, and a path means that folder, which must be new or empty (and gets no
+`latest`). Calling the undecorated body without `run_dir` fails loudly, which is
+the point of having no default in the source. A call that does not fit the
+signature raises before any run dir is made.
+
+**Where:** `{root}/{name}/{date}_{time}_{hex8}/`, with `latest` beside it -- the
+experiments' naming (see "Run dir naming"), without a tag. The root is `./runs`
+in the folder the script is *started from*, unless a `runkit.toml` there (only
+there, not above it) names another:
+
+```toml
+# runkit.toml
+runs = "runs"                  # relative to this folder; ~ is expanded
+
+[host.jetson]                  # this machine only: its hostname, or the
+runs = "/data/runs"            # hostname's first label (jetson.local -> jetson)
+```
+
+A `[host.<name>]` table matching the full hostname wins over one matching the
+first label, and either over the top level. `experiment.toml` is not read:
+it belongs to an experiment's folder, while a script's runs follow where you
+start it.
+
+**What it writes:**
+
+```
+runs/homing/2026-10-19_23-30-36_99f0bfc6/
+├── run_context.yaml   id + name
+├── meta.yaml          kind: rundir, script, module, argv, cwd, args, launch
+├── status.yaml        the same lifecycle as an experiment's run
+├── traceback.txt      only if the call raised
+├── retval.json        the return value, if not None
+└── ...                whatever the body writes (out/ only with ctx, only if used)
+```
+
+There is no `config.yaml`. `args` in `meta.yaml` is the call's arguments by
+name, defaults filled in -- plain data as is, a path as a string, anything else
+as its `repr`. `kind: rundir` tells these dirs from an experiment's. The
+decorated function returns what the body returns (not a `Run`), and an
+exception is recorded and propagates, as for an experiment.
+
 ### What it prints
 
 runkit's own output goes to stderr, so stdout is the experiment's: `2>/dev/null`
@@ -1434,6 +1511,11 @@ bodies.
   in `status.yaml`.) A dirty-git gate would sit alongside it.
 - **captured stdout.** For a run that died on a cluster three days ago, the log
   is often the only thing you want, and the run dir has no equivalent today.
+- **`@rundir` follow-ups.** Capturing the call's output into `log.txt` (at the
+  file-descriptor level, so a C extension's or a subprocess's output is kept
+  too) is the natural first home for captured stdout. A tag (no argv slot: an
+  env var, or a keyword on the call), and what a `@rundir` call inside another
+  run records about its parent, wait for a case.
 - **the overrides, separately.** `config.yaml` records what the values *were*,
   not which came from a file and which from the command line.
 - **`config=` on the decorator.** A config the experiment ships with, as a path

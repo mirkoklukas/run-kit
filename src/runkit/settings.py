@@ -122,3 +122,57 @@ def resolve_root(start, stem=None, explicit=None):
     toml = env["toml"]
     path = pathlib.Path(resolve_config_path(env["root"], toml.parent))
     return path if path.is_absolute() else toml.parent / path
+
+
+# ── runkit.toml: where `@rundir` runs go ─────────────────────────────────────
+
+RUNKIT_TOML = "runkit.toml"
+RUNKIT_KEYS = ("runs",)
+
+
+def _hostnames():
+    """This machine's names for `[host.<name>]`: the full hostname, then its
+    first label (`jetson.local` -> `jetson`)."""
+    import socket
+    full = socket.gethostname()
+    short = full.split(".")[0]
+    return [full] if short == full else [full, short]
+
+
+def resolve_runs_root(cwd=None, *, hosts=None):
+    """Where `@rundir` puts its run dirs: `{cwd}/runs`, unless `runkit.toml` in
+    `cwd` itself (not above it) says otherwise:
+
+        # runkit.toml
+        runs = "runs"                 # relative to this folder; ~ is expanded
+
+        [host.jetson]                 # this machine only (its hostname, or its
+        runs = "/data/runs"           # first label: jetson.local -> jetson)
+
+    A `[host.<name>]` table matching the full hostname wins over one matching
+    its first label; either wins over the top level. `hosts` is for tests.
+    """
+    cwd = pathlib.Path(cwd or pathlib.Path.cwd()).resolve()
+    toml = cwd / RUNKIT_TOML
+    if not toml.is_file():
+        return cwd / DEFAULT_ROOT
+    try:
+        data = tomllib.loads(toml.read_text())
+    except tomllib.TOMLDecodeError as e:
+        raise ValueError(f"{toml}: {e}") from None
+    from . import ui
+    tables = data.get("host", {})
+    if not isinstance(tables, dict):
+        raise ValueError(f"{toml}: `host` must hold tables, e.g. [host.jetson]")
+    top = {k: v for k, v in data.items() if k != "host"}
+    host = next((tables[h] for h in (hosts or _hostnames()) if h in tables), {})
+    for where, table in ((RUNKIT_TOML, top), ("its [host] table", host)):
+        unknown = [k for k in table if k not in RUNKIT_KEYS]
+        if unknown:
+            ui.warn(f"{toml} {where}: unknown key(s) {unknown} "
+                    f"(known: {', '.join(RUNKIT_KEYS)})")
+    runs = host.get("runs", top.get("runs", DEFAULT_ROOT))
+    if not isinstance(runs, str):
+        raise ValueError(f"{toml}: `runs` must be a path, got {runs!r}")
+    path = pathlib.Path(runs).expanduser()
+    return path if path.is_absolute() else cwd / path

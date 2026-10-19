@@ -203,6 +203,8 @@ them mutually exclusive in one project instead —
   the same merge rules and recorded in `meta.yaml`'s `launch`. Not by hostname
   (brittle), and not by an untracked local override file (runs on two machines
   could silently differ).
+  (`@rundir`'s `runkit.toml` does key on the hostname, `[host.<name>]` -- but
+  only for where runs go, which changes no result; see design.md, "Scripts".)
 
 ---
 

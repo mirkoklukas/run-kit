@@ -242,6 +242,16 @@ def run_started(*, name, run_id, run_dir, tag, changes, n_fields, launch=None,
                       (0, PADDING_LEFT), expand=False))
 
 
+
+def rundir_started(*, name, run_id, run_dir):
+    """The start banner of an `@rundir` run: which run, where. There is no
+    config to show -- the script's own arguments are in meta.yaml."""
+    _flush_stdout()
+    err.print(Padding(Group(f"[bold green]▶ runkit · {escape(name)}[/bold green]",
+                            Padding(_kv([("id", run_id), ("dir", short_path(run_dir))]),
+                                    (0, 0, 0, 2))),
+                      (0, PADDING_LEFT), expand=False))
+
 def _duration(seconds):
     if seconds < 60:
         return f"{seconds:.1f}s"
