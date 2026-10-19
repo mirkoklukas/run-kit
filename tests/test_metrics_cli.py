@@ -211,7 +211,7 @@ def _live_run(tmp_path, pid=None):
     """A run dir as a live run leaves it: running, some rows, no end yet."""
     d = tmp_path / "live" / "2026-09-27_10-00-00_abcdef12"
     (d / "metrics").mkdir(parents=True)
-    (d / "run_context.yaml").write_text("id: live_abcdef12\nname: live\n")
+    (d / "context.yaml").write_text("id: live_abcdef12\nname: live\n")
     _set_status(d, "running", pid=pid or os.getpid())
     with open(d / "metrics" / "run.jsonl", "w") as f:
         for i in range(12):
@@ -382,7 +382,7 @@ def test_window_changes():
 def test_metrics_of_a_run_without_any(tmp_path, capsys):
     d = tmp_path / "r"
     d.mkdir()
-    (d / "run_context.yaml").write_text("id: r_1\nname: r\n")
+    (d / "context.yaml").write_text("id: r_1\nname: r\n")
     assert cli.main(["metrics", str(d)]) == {}
     assert "no metrics yet" in capsys.readouterr().out
 

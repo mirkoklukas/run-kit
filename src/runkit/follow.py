@@ -17,6 +17,7 @@ import yaml
 
 from . import ui
 from .metrics import FOLDER, NOTES
+from .utils import context_file
 
 POLL_S = 1.0          # how often to look for new rows
 HEADER_EVERY = 40     # reprint the header every so many rows, so it stays in view
@@ -327,7 +328,7 @@ def _print_checkpoint(status, rec, table, window, before):
 
 def _print_end(run_dir, status):
     try:
-        run_id = yaml.safe_load((run_dir / "run_context.yaml").read_text())["id"]
+        run_id = yaml.safe_load(context_file(run_dir).read_text())["id"]
     except (OSError, yaml.YAMLError, KeyError, TypeError):
         run_id = run_dir.name
     ui.run_finished(run_id=run_id, status=status.get("status"),

@@ -5,7 +5,7 @@ its verbs (`run`, `eval`, `viz`); `@experiment(name=...)` is the run-only
 shorthand. A run body is `run(cfg, ctx)`. Its wrapper makes it so that, before
 the body runs, a fresh run dir is created and the run frozen into it; after, a
 non-`None` return value is dumped into the run dir and the caller gets a `Run`. `config.yaml`,
-`run_context.yaml` and `meta.yaml` are what the run was; `status.yaml` (and
+`context.yaml` and `meta.yaml` are what the run was; `status.yaml` (and
 `traceback.txt`) are how that run went. runkit owns the top level of the run
 dir; the body owns `out/` (`ctx.out`). Staging is driven by keyword args (the
 CLI flags): `tag`, `root`.
@@ -30,7 +30,8 @@ import yaml
 
 from . import ui
 from .settings import resolve_follow, resolve_root
-from .utils import config_changes, dump_retval, point_latest, serialize_cfg
+from .utils import (CONTEXT, config_changes, context_file, dump_retval, point_latest,
+                    serialize_cfg)
 
 
 PROGRESS_EVERY_S = 2.0       # ctx.progress writes status.yaml at most this often
@@ -38,7 +39,7 @@ PROGRESS_EVERY_S = 2.0       # ctx.progress writes status.yaml at most this ofte
 
 def _private():
     """A RunContext field about *this process*, not the run: never written to
-    run_context.yaml, and not part of comparing contexts."""
+    context.yaml, and not part of comparing contexts."""
     return dataclasses.field(default=None, repr=False, compare=False)
 
 
@@ -187,7 +188,7 @@ class Run:
     """What a *caller* gets back, as `RunContext` is what the body is handed.
 
     The in-memory image of a run dir: one field per file it wrote --
-    `config.yaml`, `run_context.yaml`, `retval.json`.
+    `config.yaml`, `context.yaml`, `retval.json`.
 
     `config` is carried because the caller does not always have it: from the CLI
     it is `autocli` that builds it, and comparing a sweep means pairing each
@@ -287,7 +288,7 @@ def init_run(cfg, *, name, tag, root, script=None, module=None, branch=None):
     """Create the run dir, freeze the run into it, return a RunContext.
 
     Writes the three files that say what the run was -- `config.yaml` (the
-    resolved cfg), `run_context.yaml` (the RunContext) and `meta.yaml` (how the
+    resolved cfg), `context.yaml` (the RunContext) and `meta.yaml` (how the
     attempt was staged) -- and creates the empty `out/` the body writes into.
     `status.yaml` is not written here: nothing is running
     yet, and the lifecycle belongs to whoever calls the body.
@@ -304,7 +305,7 @@ def init_run(cfg, *, name, tag, root, script=None, module=None, branch=None):
     ctx = RunContext(dir=run_dir, id=uid, name=name)
     ctx.out.mkdir()
     _dump_yaml(run_dir / "config.yaml", serialize_cfg(cfg))
-    _dump_yaml(run_dir / "run_context.yaml", {"id": uid, "name": name})
+    _dump_yaml(run_dir / CONTEXT, {"id": uid, "name": name})
     _dump_yaml(run_dir / "meta.yaml",
                {"tag": tag, "script": str(script) if script else None,
                 "module": module, "launch": _launch(),
@@ -317,7 +318,7 @@ def _lineage(ckpt):
     """Where a branch comes from, for `meta.yaml`: the parent run (id and dir) and
     its checkpoint (name, index, and the step count if its `info` has one)."""
     try:
-        parent_id = yaml.safe_load((ckpt.run / "run_context.yaml").read_text())["id"]
+        parent_id = yaml.safe_load(context_file(ckpt.run).read_text())["id"]
     except Exception:                                        # noqa: BLE001
         parent_id = ckpt.run.name
     return {"run": parent_id, "dir": str(ckpt.run), "checkpoint": ckpt.name,

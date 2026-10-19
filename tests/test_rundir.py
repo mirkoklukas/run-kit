@@ -40,7 +40,7 @@ def test_fresh_run_dir_under_cwd_runs(cwd):
     assert meta["cwd"] == str(cwd)
     status = _load(d / "status.yaml")
     assert status["status"] == "ok"
-    ctx = _load(d / "run_context.yaml")
+    ctx = _load(d / "context.yaml")
     assert ctx["name"] == "homing" and ctx["id"].startswith("homing_")
     assert (d / "retval.json").is_file()
     assert not (d / "config.yaml").exists()          # no Config: nothing to freeze

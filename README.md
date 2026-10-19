@@ -57,7 +57,7 @@ runkit metrics plot runs/baseline/latest       # ... plotted: every key, or name
 
 Run dirs land at `{root}/{name}/{date}_{time}_{hex8}[_{tag}]/` (plus a
 `{root}/{name}/latest` link to the newest one), with the run
-`id = {name}_{hex8}` (greppable in `run_context.yaml`). runkit writes its records
+`id = {name}_{hex8}` (greppable in `context.yaml`). runkit writes its records
 at the top of the run dir; the experiment writes under `out/` (`ctx.out`). See `design.md`.
 
 ## Layout

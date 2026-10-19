@@ -41,7 +41,7 @@ from . import ui
 from .exp import (RunContext, _Live, _dump_yaml, _launch, _module_name, _report,
                   _resolve_dir, _stamp, _write_status, _write_traceback)
 from .settings import resolve_runs_root
-from .utils import dump_retval, point_latest
+from .utils import CONTEXT, dump_retval, point_latest
 
 INJECTED = ("run_dir", "ctx")     # what a body may ask for, by parameter name
 
@@ -162,7 +162,7 @@ def _plain(v):
 
 
 def _create(name, explicit, *, script, module, call):
-    """Make the run dir and write what the call was: `run_context.yaml` and
+    """Make the run dir and write what the call was: `context.yaml` and
     `meta.yaml`. A fresh one under the runs root becomes `latest`; an explicit
     folder must be new or empty, and gets no `latest`."""
     hex8 = uuid.uuid4().hex[:8]
@@ -176,7 +176,7 @@ def _create(name, explicit, *, script, module, call):
                                   f"a run dir starts empty")
         run_dir.mkdir(parents=True, exist_ok=True)
     ctx = RunContext(dir=run_dir, id=f"{name}_{hex8}", name=name)
-    _dump_yaml(run_dir / "run_context.yaml", {"id": ctx.id, "name": name})
+    _dump_yaml(run_dir / CONTEXT, {"id": ctx.id, "name": name})
     _dump_yaml(run_dir / "meta.yaml",
                {"kind": "rundir", "script": str(script), "module": module,
                 "argv": list(sys.argv), "cwd": str(pathlib.Path.cwd()),

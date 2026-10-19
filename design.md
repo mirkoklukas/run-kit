@@ -630,7 +630,7 @@ compares its config with the parent's.
 ```
 runs/baseline/2026-06-26_15-40-12_a3f9c1e7_abl-a/
 ├── config.yaml        the resolved config -- what it ran with
-├── run_context.yaml   id + name -- what it ran as
+├── context.yaml       id + name -- what it ran as
 ├── meta.yaml          tag, script, module, launch -- how the attempt was staged
 ├── status.yaml        running | ok | failed | interrupted; who, how far, how long
 ├── traceback.txt      only if the run raised
@@ -660,7 +660,7 @@ steps: 1000
 ```
 
 ```yaml
-# run_context.yaml -- exactly the RunContext the body was handed
+# context.yaml -- exactly the RunContext the body was handed
 id: baseline_a3f9c1e7
 name: baseline
 ```
@@ -842,7 +842,7 @@ is an error, a field it gained takes its default.
   run wrapper hands the body, while the body runs; a context rebuilt from disk
   (`load_run`, `eval`, `viz`) or a finished run's raises on `ctx.checkpoint`.
   `live` is about this process, not the run: it is not written to
-  `run_context.yaml` and not part of comparing contexts.
+  `context.yaml` and not part of comparing contexts.
 - **`status.yaml` names the latest one** as a path relative to the run dir —
   `checkpoint: checkpoints/best` — written as soon as a checkpoint completes
   (not throttled like progress) and kept in the final write, so a failed run
@@ -1307,8 +1307,10 @@ class Run:                   # what the *caller* gets back
 ```
 
 They are duals: `RunContext` goes in, `Run` comes out. `Run` has one field per
-file in the run dir — `config` ↔ `config.yaml`, `context` ↔ `run_context.yaml`,
-`retval` ↔ `retval.json` — so it is the in-memory image of a run dir.
+file in the run dir — `config` ↔ `config.yaml`, `context` ↔ `context.yaml`,
+`retval` ↔ `retval.json` — so it is the in-memory image of a run dir. (Run dirs made
+before 2026-10 call it `run_context.yaml`; runkit still reads that name, and
+writes only the new one.)
 
 Three deliberate choices:
 
@@ -1335,7 +1337,7 @@ The methods are how the body asks runkit to write into the run while it goes
 (see "Checkpoints" and "Progress and metrics"). What they may do follows from
 `live`, which is about this process, not the run: true in the context the run
 wrapper hands the body, false once the body returns and in any context opened
-from disk. It is not written to `run_context.yaml` and not part of comparing
+from disk. It is not written to `context.yaml` and not part of comparing
 contexts, so `load_run(...) == run(...)` still holds.
 
 ### 2.16 How it works
@@ -1347,7 +1349,7 @@ the rest to that verb. For `run`:
 1. **argv becomes a `Config`** — the two namespaces are split, the yaml (if any)
    is loaded, `key=value` is merged on top, and the dataclass is built.
 2. **the wrapper creates the run** — a fresh run dir and the `RunContext`,
-   frozen into `config.yaml` / `run_context.yaml` / `meta.yaml`, `status.yaml`
+   frozen into `config.yaml` / `context.yaml` / `meta.yaml`, `status.yaml`
    set to `running` — then calls your body with a live context. From here the
    body owns `ctx.out`, and runkit writes into the run only when the body asks
    (`ctx.checkpoint`, `ctx.progress`, `ctx.record`) until it returns.
@@ -1397,7 +1399,7 @@ those get grouped by sweep, not by day.
 
 `{time}` is `HH-MM-SS`, so runs started in the same minute still sort in the
 order they started (within one second, runkit breaks the tie on when each run's
-`run_context.yaml` was written); no counter, which would need a scan of the
+`context.yaml` was written); no counter, which would need a scan of the
 folder at creation and races between parallel launches. `{hex8}` is the run
 id's hex, so the directory never collides, and the id is in the path — split
 across it: the experiment folder is the name, the dir's `{hex8}` the rest.
@@ -1412,7 +1414,7 @@ Everything fixed-width comes first and the one free-form part last:
 `{date}_{time}_{hex8}` is always 28 characters, and the tag — dropped when unset,
 underscores and all — is the remainder. So the hex sits in the same column of
 every `ls`, where it is easy to find and copy (`viz a3f9`), a long tag only
-lengthens its own line, and the name parses without guessing. `run_context.yaml`
+lengthens its own line, and the name parses without guessing. `context.yaml`
 and `meta.yaml` stay the source of truth all the same. Built in one place
 (`_resolve_dir`) so the scheme is easy to change.
 
@@ -1544,7 +1546,7 @@ it.
 
 ```
 runs/homing/2026-10-19_23-30-36_99f0bfc6/
-├── run_context.yaml   id + name
+├── context.yaml       id + name
 ├── meta.yaml          kind: rundir, script, module, argv, cwd, args, launch
 ├── status.yaml        running | ok | failed | interrupted, as for any run
 ├── traceback.txt      only if the call raised

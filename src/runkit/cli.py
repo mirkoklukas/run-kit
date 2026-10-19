@@ -53,6 +53,7 @@ from . import ui
 from .autocli import PATH_VERBS, VERBS, dispatch
 from .exp import SCRIPT_MODULE, Experiment
 from .settings import resolve_root
+from .utils import is_run_dir
 
 HELP = __doc__[__doc__.index("Usage:"):].strip()
 
@@ -116,7 +117,7 @@ def _experiment_of(path):
     from .utils import load_yaml
     run_dir = run_dir_of(path)
     if run_dir is None:
-        sys.exit(f"{path} is not in a run dir (no run_context.yaml above it); "
+        sys.exit(f"{path} is not in a run dir (no context.yaml above it); "
                  f"name the experiment: runkit eval <experiment> [CHECKPOINT]")
     try:
         meta = load_yaml(run_dir / "meta.yaml")
@@ -208,10 +209,10 @@ def _metrics_path(argv, usage):
         stream, run_dir = target.stem, target.parent
     else:
         run_dir = target
-    if run_dir.name == "metrics" and (run_dir.parent / "run_context.yaml").is_file():
+    if run_dir.name == "metrics" and is_run_dir(run_dir.parent):
         run_dir = run_dir.parent                 # a run's metrics/: the run
-    if not (run_dir / "run_context.yaml").is_file() and not any(run_dir.glob("*.jsonl")):
-        sys.exit(f"{run_dir} is not a run dir (no run_context.yaml) and holds no "
+    if not is_run_dir(run_dir) and not any(run_dir.glob("*.jsonl")):
+        sys.exit(f"{run_dir} is not a run dir (no context.yaml) and holds no "
                  f".jsonl streams; pass a run dir, its metrics/ folder, or a stream "
                  f"file, e.g. runs/<name>/latest\n\n{usage}")
     return run_dir, stream, rest
@@ -400,7 +401,7 @@ def _metrics_follow(run_dir, series, opts, usage):
     """Rows of one stream as they are written, until the run ends."""
     from .follow import follow
     from .metrics import FOLDER, parse_rows
-    if not (run_dir / "run_context.yaml").is_file():
+    if not is_run_dir(run_dir):
         sys.exit(f"follow needs a run dir: {run_dir} is a folder of streams\n\n{usage}")
     wanted = _by_stream(series) or {"run": [""]}
     if len(wanted) > 1:

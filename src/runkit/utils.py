@@ -169,6 +169,24 @@ def plain(v):
     return repr(v)
 
 
+
+CONTEXT = "context.yaml"            # the RunContext on disk -- and what marks a run dir
+OLD_CONTEXT = "run_context.yaml"    # its name until 2026-10: still read, never written
+
+
+def context_file(run_dir):
+    """`{run_dir}/context.yaml`, or `run_context.yaml` in a run dir made before
+    the rename (when only that one is there)."""
+    d = pathlib.Path(run_dir)
+    if not (d / CONTEXT).exists() and (d / OLD_CONTEXT).exists():
+        return d / OLD_CONTEXT
+    return d / CONTEXT
+
+
+def is_run_dir(path):
+    """Whether `path` is a run dir: it holds a context file (either name)."""
+    return context_file(path).is_file()
+
 def point_latest(target):
     """Point `latest`, beside `target`, at it: `{folder}/latest -> {target name}`.
 

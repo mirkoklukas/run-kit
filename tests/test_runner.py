@@ -16,7 +16,7 @@ import yaml
 from runkit import Experiment, Run, RunContext, experiment, init_run
 from runkit.autocli import main
 from runkit.config import build_cfg, deep_merge, parse_overrides
-from runkit.runs import dir_hex
+from runkit.runs import dir_hex, load_run, select_run
 from runkit.utils import resolve_config_path
 
 
@@ -170,10 +170,10 @@ def _yaml(d, name):
     return yaml.safe_load((d / name).read_text())
 
 
-def test_run_context_and_meta_are_written(tmp_path):
+def test_context_and_meta_are_written(tmp_path):
     main(run, ["--tag=t1", f"--root={tmp_path}"])
     d = _only_run_dir(tmp_path)
-    rc = _yaml(d, "run_context.yaml")
+    rc = _yaml(d, "context.yaml")
     assert rc == {"id": f"mock_{dir_hex(d)}", "name": "mock"}
     meta = _yaml(d, "meta.yaml")
     assert meta["tag"] == "t1"
@@ -220,7 +220,7 @@ def test_status_interrupted_on_ctrl_c(tmp_path):
 def test_init_run_writes_no_status(tmp_path):
     """`status` is the body's lifecycle; init_run alone has nothing running."""
     ctx = init_run(Cfg(), name="x", tag=None, root=tmp_path)
-    assert (ctx.dir / "run_context.yaml").is_file()
+    assert (ctx.dir / "context.yaml").is_file()
     assert not (ctx.dir / "status.yaml").exists()
 
 
@@ -263,7 +263,7 @@ def test_runkit_owns_the_top_level_and_the_body_owns_out(tmp_path):
     r = main(run, [f"--root={tmp_path}"])
     assert r.context.out == r.context.dir / "out"
     top = {p.name for p in r.context.dir.iterdir()}
-    assert top == {"config.yaml", "run_context.yaml", "meta.yaml", "status.yaml",
+    assert top == {"config.yaml", "context.yaml", "meta.yaml", "status.yaml",
                    "retval.json", "out"}
     assert [p.name for p in r.context.out.iterdir()] == ["marker.txt"]
 
@@ -574,3 +574,14 @@ def test_run_applies_ops_after_the_other_layers(tmp_path, capsys):
     assert b.config == C(w=5.0, n=5)                  # on the parent's value
     with pytest.raises(SystemExit, match="is an int"):
         exp.main(["n*=1.1", f"--root={tmp_path}"])
+
+
+def test_run_dir_from_before_the_rename_still_reads(tmp_path):
+    """A run dir written with `run_context.yaml` (the old name) still opens."""
+    from runkit.runs import run_dir_of
+    r = main(run, [f"--root={tmp_path}"])
+    d = r.context.dir
+    (d / "context.yaml").rename(d / "run_context.yaml")
+    assert run_dir_of(d / "out") == d
+    assert select_run(tmp_path, "mock", dir_hex(d)) == d
+    assert load_run(d, Cfg).context == r.context

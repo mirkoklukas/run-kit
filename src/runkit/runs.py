@@ -12,7 +12,7 @@ import yaml
 
 from .config import build_cfg
 from .exp import Run, RunContext
-from .utils import load_yaml
+from .utils import context_file, is_run_dir, load_yaml
 
 
 # A run dir's name is `{date}_{time}_{hex8}[_{tag}]`, fixed-width up to the tag:
@@ -34,7 +34,7 @@ def run_dirs(root, name):
 
     Names lead with `{date}_{time}`, so the name orders runs to the second.
     Within a second (a sweep) the rest of the name is a random hex, so ties
-    break on when `run_context.yaml` was written -- once, at creation.
+    break on when `context.yaml` was written -- once, at creation.
     `latest` (a symlink) and dot-entries are skipped.
     """
     d = pathlib.Path(root) / name
@@ -48,7 +48,7 @@ def run_dirs(root, name):
 def _start_key(run_dir):
     stamp = run_dir.name[:len("YYYY-MM-DD_HH-MM-SS")]
     try:
-        created = (run_dir / "run_context.yaml").stat().st_mtime_ns
+        created = context_file(run_dir).stat().st_mtime_ns
     except OSError:
         created = 0
     return stamp, created
@@ -98,9 +98,9 @@ def select_run(root, name, which=None, *, require_ok=False):
         run_dir = matches[0]
 
     try:
-        owner = load_yaml(run_dir / "run_context.yaml").get("name")
+        owner = load_yaml(context_file(run_dir)).get("name")
     except ValueError:
-        raise RunNotFound(f"{run_dir} is not a run dir (no run_context.yaml)") from None
+        raise RunNotFound(f"{run_dir} is not a run dir (no context.yaml)") from None
     if owner != name:
         raise RunNotFound(f"{run_dir} is a run of {owner!r}, not {name!r}")
     return run_dir
@@ -114,7 +114,7 @@ def load_run(run_dir, cfg_cls):
     `status.yaml` is there to check.
     """
     run_dir = pathlib.Path(run_dir).resolve()
-    rc = load_yaml(run_dir / "run_context.yaml")
+    rc = load_yaml(context_file(run_dir))
     ctx = RunContext(dir=run_dir, id=rc["id"], name=rc.get("name"),
                      _opened=time.monotonic())      # for elapsed_s in what eval records
     cfg = build_cfg(cfg_cls, load_yaml(run_dir / "config.yaml"))
@@ -143,7 +143,7 @@ def run_dir_of(path):
     anything below either -- or None."""
     d = pathlib.Path(path).resolve()
     for candidate in (d, *d.parents):
-        if (candidate / "run_context.yaml").is_file():
+        if is_run_dir(candidate):
             return candidate
     return None
 

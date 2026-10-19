@@ -18,7 +18,7 @@ import time
 
 import numpy as np
 
-from .utils import plain
+from .utils import is_run_dir, plain
 
 FOLDER = "metrics"
 RESERVED_PREFIX = "_"          # keys starting with it are runkit's
@@ -91,7 +91,7 @@ def stream_folder(run_dir):
     as a folder of streams itself (an eval's `checkpoints/best/eval/`, whose
     `episodes.jsonl` is stream `episodes`)."""
     d = pathlib.Path(run_dir)
-    return d / FOLDER if (d / "run_context.yaml").is_file() else d
+    return d / FOLDER if is_run_dir(d) else d
 
 
 def stream_label(run_dir, stream):
