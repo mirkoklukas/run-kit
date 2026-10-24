@@ -208,6 +208,49 @@ them mutually exclusive in one project instead —
 
 ---
 
+## `run_dir_root` as a function of the call's arguments
+
+**Built instead: a template** (design.md, 3.1): `run_dir_root: str =
+"{runtime}/runs"`, filled in with the call's arguments and `{env[NAME]}`.
+
+**The design kept here: a callable default**, a function of the call's
+arguments (as in `config.yaml`) that returns the root, or None for the usual
+one:
+
+```python
+@rundir("controller")
+def main(runtime: Path, *, ctx: RunContext,
+         run_dir_root=lambda args: Path(args["runtime"]) / "runs"):
+    ...
+```
+
+**The problem it solves:** a runs root that depends on the call's arguments.
+The motivating case (control-kit's runtime): a process is handed its runtime
+folder as `--runtime`, and its run dirs belong in `<runtime>/runs/` wherever it
+is started from. `@rundir` makes the run dir before the body runs, so the body
+can't compute the root itself; and a separate `--runs-root` argument would make
+the caller pass the same information twice. The default has to be derived from
+the arguments inside runkit.
+
+**How it would work:** runkit reads the default from the source signature and
+shows `run_dir_root: Path | None = None` publicly instead -- typer can't parse a
+callable (nor a `Path | Callable` union), but it never sees the source
+signature, only the wrapper's. The body gets the root used.
+
+**Why the template was built instead:** it covers that case, and it is
+declarative: the public default can be the template itself, so `--help` shows
+the rule (`[default: {runtime}/runs]`), while a lambda shows nothing useful (and
+can't be given on a command line; jsonargparse could take a named function by
+import path, but not a lambda). A plain path is a template without fields, so
+one mechanism covers both.
+
+**When to build it:** if a root needs logic a template can't express
+(conditionals, a path computed from several arguments). It would sit beside the
+template: a callable default evaluated on the arguments, the public default
+None.
+
+---
+
 ## Open between the proposals
 
 Questions left over from building `eval` and `viz`.

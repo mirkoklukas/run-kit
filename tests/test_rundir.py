@@ -181,6 +181,116 @@ def test_needs_a_name():
         def main(*, run_dir): ...
 
 
+# ── run_dir_root ──────────────────────────────────────────────────────────────
+
+def test_run_dir_root_without_default_is_the_usual_root(cwd):
+    @rundir("homing")
+    def main(*, run_dir, run_dir_root):
+        return run_dir, run_dir_root
+
+    run_dir, root = main()
+    assert root == cwd / "runs" and run_dir.parent == cwd / "runs" / "homing"
+
+
+def test_run_dir_root_default_path(cwd):
+    @rundir("homing")
+    def main(*, run_dir, run_dir_root=pathlib.Path("elsewhere")):
+        return run_dir, run_dir_root
+
+    run_dir, root = main()
+    assert root == cwd / "elsewhere" and run_dir.parent == cwd / "elsewhere" / "homing"
+    assert (cwd / "elsewhere" / "homing" / "latest").resolve() == run_dir
+
+
+def test_run_dir_root_template_of_the_arguments(cwd):
+    @rundir("controller")
+    def main(runtime: pathlib.Path, rate: float = 50.0, *, ctx: RunContext,
+             run_dir_root: str = "{runtime}/runs"):
+        return ctx.dir, run_dir_root
+
+    run_dir, root = main(cwd / "rt")
+    assert root == cwd / "rt" / "runs" and run_dir.parent == cwd / "rt" / "runs" / "controller"
+    # run_dir_root isn't one of the call's arguments
+    assert _load(run_dir / "config.yaml") == {"runtime": str(cwd / "rt"), "rate": 50.0}
+
+
+def test_run_dir_root_template_with_the_environment(cwd, monkeypatch):
+    monkeypatch.setenv("RUNS_HOME", str(cwd / "home"))
+
+    @rundir("controller")
+    def main(name: str = "a", *, run_dir, run_dir_root="{env[RUNS_HOME]}/{name}"):
+        return run_dir
+
+    assert main().parent == cwd / "home" / "a" / "controller"
+    monkeypatch.delenv("RUNS_HOME")
+    with pytest.raises(ValueError, match="no environment variable 'RUNS_HOME'"):
+        main()
+
+
+def test_run_dir_root_argument_none_is_the_usual_root(cwd):
+    @rundir("controller")
+    def main(runtime=None, *, run_dir, run_dir_root="{runtime}/runs"):
+        return run_dir
+
+    assert main().parent == cwd / "runs" / "controller"
+
+
+def test_run_dir_root_given_wins_and_is_a_template_too(cwd, tmp_path):
+    @rundir("controller")
+    def main(name: str = "a", *, run_dir, run_dir_root="from-default"):
+        return run_dir, run_dir_root
+
+    run_dir, root = main(run_dir_root=str(tmp_path / "given-{name}"))
+    assert root == tmp_path / "given-a" and run_dir.parent == tmp_path / "given-a" / "controller"
+    assert not (cwd / "from-default").exists()
+    with pytest.raises(ValueError, match="no argument `nope`"):
+        main(run_dir_root="{nope}/runs")
+
+
+def test_explicit_run_dir_has_no_root(cwd, tmp_path):
+    @rundir("controller")
+    def main(*, run_dir, run_dir_root="elsewhere"):
+        return run_dir, run_dir_root
+
+    run_dir, root = main(run_dir=tmp_path / "exact")
+    assert run_dir == tmp_path / "exact" and root is None
+    assert not (cwd / "elsewhere").exists()
+
+
+def test_run_dir_root_public_signature_shows_the_template():
+    @rundir("sig")
+    def main(leg: int, *, ctx: RunContext, run_dir_root="{leg}/runs", **extra):
+        ...
+
+    params = inspect.signature(main).parameters
+    assert list(params) == ["leg", "run_dir", "run_dir_root", "extra"]
+    assert params["run_dir_root"].default == "{leg}/runs"
+    assert params["run_dir_root"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert main.__annotations__["run_dir_root"] == (str | None)
+
+
+def test_run_dir_root_only_when_declared(cwd):
+    @rundir("homing")
+    def main(*, run_dir):
+        ...
+
+    assert "run_dir_root" not in inspect.signature(main).parameters
+    with pytest.raises(TypeError):
+        main(run_dir_root=str(cwd))
+
+
+@pytest.mark.parametrize("body, match", [
+    (lambda run_dir_root=None, *, run_dir: None, "keyword-only"),
+    (lambda *, run_dir, run_dir_root="{nope}/runs": None, "has no argument `nope`"),
+    (lambda *, run_dir, run_dir_root="{run_dir}/x": None, "has no argument `run_dir`"),
+    (lambda env=None, *, run_dir, run_dir_root="{env[HOME]}": None, "shadow"),
+    (lambda *, run_dir, run_dir_root=lambda args: "x": None, "path or a template"),
+])
+def test_bad_run_dir_roots(body, match):
+    with pytest.raises(TypeError, match=match):
+        rundir("x")(body)
+
+
 # ── runkit.toml ───────────────────────────────────────────────────────────────
 
 def test_runs_root_default(tmp_path):

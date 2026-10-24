@@ -1526,12 +1526,41 @@ dir; a path means that folder, which must be new or empty (and gets no
 the point of having no default in the source. A call that does not fit the
 signature raises before any run dir is made.
 
+**`run_dir_root`: where a fresh run dir goes.** A body may also declare
+`run_dir_root`, keyword-only -- unlike `run_dir` and `ctx`, with or without a
+default. The default is a path, or a template filled in with the call's
+arguments (as in `config.yaml`: defaults filled in, a path as a string) and the
+environment (`{env[NAME]}`):
+
+```python
+@rundir("controller")
+def main(runtime: Path, *, ctx: RunContext, run_dir_root: str = "{runtime}/runs"):
+    ...
+```
+
+The decorated function shows `run_dir_root: str | None` with the template as
+its default, so a CLI built from the signature gets an optional
+`--run-dir-root` whose help shows the template. The root of a fresh run dir
+is, the first that applies: the call's `run_dir_root` (a template too); the
+body's default; the usual root (3.2), also when an argument the template refers
+to is None (no `None/runs`). `~` is expanded, a relative path is relative to
+the current folder. The body gets the root used. An explicit `run_dir` has no
+root: the body gets None.
+
+A template is checked when the function is decorated: it may refer only to the
+function's own arguments and to `env` (a function with an argument named `env`
+can't use `{env[...]}`). An environment variable that isn't set is an error at
+the call, naming it. A body that doesn't declare `run_dir_root` gets neither
+the parameter nor `--run-dir-root`. (A function of the arguments as the default
+was considered; see proposals.md.)
+
 ### 3.2 Where runs go: `runkit.toml`
 
 `{root}/{name}/{date}_{time}_{hex8}/`, with `latest` beside it -- the same
-naming as everywhere in runkit (see "Run dir naming"), without a tag. The root
-is `./runs` in the folder the script is *started from*, unless a `runkit.toml`
-there (only there, not above it) names another:
+naming as everywhere in runkit (see "Run dir naming"), without a tag. Unless
+`run_dir_root` says otherwise (3.1), the root is `./runs` in the folder the
+script is *started from*, unless a `runkit.toml` there (only there, not above
+it) names another:
 
 ```toml
 # runkit.toml
